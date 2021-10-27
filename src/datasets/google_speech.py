@@ -12,8 +12,8 @@ from torchvision.transforms import Normalize
 
 from torch.utils.data import Dataset
 from nlpaug.augmenter.audio import AudioAugmenter
-from src.datasets.librispeech import WavformAugmentation, SpectrumAugmentation
-from src.datasets.root_paths import DATA_ROOTS
+from  viewmaker.src.datasets.librispeech import WavformAugmentation, SpectrumAugmentation
+from  viewmaker.src.datasets.root_paths import DATA_ROOTS
 
 GOOGLESPEECH_MEAN = [-46.847]
 GOOGLESPEECH_STDEV = [19.151]

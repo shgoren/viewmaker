@@ -2,9 +2,9 @@ import math
 import torch
 import numpy as np
 
-from src.utils.utils import l2_normalize
-from src.objectives.simclr import SimCLRObjective
-from src.objectives.infonce import NoiseConstrastiveEstimation
+from  viewmaker.src.utils.utils import l2_normalize
+from  viewmaker.src.objectives.simclr import SimCLRObjective
+from  viewmaker.src.objectives.infonce import NoiseConstrastiveEstimation
 
 
 class AdversarialSimCLRLoss(object):

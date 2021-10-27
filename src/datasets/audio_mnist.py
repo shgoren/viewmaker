@@ -12,9 +12,9 @@ from torchvision.transforms import Normalize
 
 from torch.utils.data import Dataset
 from nlpaug.augmenter.audio import AudioAugmenter
-from src.datasets.librispeech import WavformAugmentation, SpectrumAugmentation
+from  viewmaker.src.datasets.librispeech import WavformAugmentation, SpectrumAugmentation
 
-from src.datasets.root_paths import DATA_ROOTS
+from  viewmaker.src.datasets.root_paths import DATA_ROOTS
 
 AUDIOMNIST_MEAN = [-90.293]
 AUDIOMNIST_STDEV = [11.799]

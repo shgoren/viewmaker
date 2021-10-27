@@ -7,7 +7,7 @@ import torch
 import torch.utils.data as data
 from torchvision import transforms, datasets
 
-from src.datasets.root_paths import DATA_ROOTS
+from  viewmaker.src.datasets.root_paths import DATA_ROOTS
 
 
 class MNIST(data.Dataset):

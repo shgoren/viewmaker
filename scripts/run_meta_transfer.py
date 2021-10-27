@@ -1,9 +1,9 @@
 import os
 from copy import deepcopy
-from src.systems import systems
-from src.utils.utils import load_json
-from src.utils.setup import process_config
-from src.utils.callbacks import MoCoLRScheduler
+from  viewmaker.src.systems import systems
+from  viewmaker.src.utils.utils import load_json
+from  viewmaker.src.utils.setup import process_config
+from  viewmaker.src.utils.callbacks import MoCoLRScheduler
 import random, torch, numpy
 
 import wandb

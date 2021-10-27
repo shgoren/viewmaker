@@ -3,18 +3,18 @@ import random
 from torchvision import transforms
 from PIL import ImageFilter, Image
 
-from src.datasets.cifar10 import CIFAR10, CIFAR10Corners
+from  viewmaker.src.datasets.cifar10 import CIFAR10, CIFAR10Corners
 
-from src.datasets.meta_datasets.aircraft import Aircraft
-from src.datasets.meta_datasets.cu_birds import CUBirds
-from src.datasets.meta_datasets.dtd import DTD
-from src.datasets.meta_datasets.fashionmnist import FashionMNIST
-from src.datasets.meta_datasets.fungi import Fungi
-from src.datasets.meta_datasets.mnist import MNIST
-from src.datasets.meta_datasets.mscoco import MSCOCO as MSCOCO2
-from src.datasets.meta_datasets.traffic_sign import TrafficSign
-from src.datasets.meta_datasets.vgg_flower import VGGFlower
-from src.datasets.data_statistics import get_data_mean_and_stdev
+from  viewmaker.src.datasets.meta_datasets.aircraft import Aircraft
+from  viewmaker.src.datasets.meta_datasets.cu_birds import CUBirds
+from  viewmaker.src.datasets.meta_datasets.dtd import DTD
+from  viewmaker.src.datasets.meta_datasets.fashionmnist import FashionMNIST
+from  viewmaker.src.datasets.meta_datasets.fungi import Fungi
+from  viewmaker.src.datasets.meta_datasets.mnist import MNIST
+from  viewmaker.src.datasets.meta_datasets.mscoco import MSCOCO as MSCOCO2
+from  viewmaker.src.datasets.meta_datasets.traffic_sign import TrafficSign
+from  viewmaker.src.datasets.meta_datasets.vgg_flower import VGGFlower
+from  viewmaker.src.datasets.data_statistics import get_data_mean_and_stdev
 
 DATASET = {
     'cifar10': CIFAR10,

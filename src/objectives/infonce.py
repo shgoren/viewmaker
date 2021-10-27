@@ -2,7 +2,7 @@ import math
 import torch
 import numpy as np
 
-from src.utils.utils import l2_normalize
+from  viewmaker.src.utils.utils import l2_normalize
 
 
 class NoiseConstrastiveEstimation(object):

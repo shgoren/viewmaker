@@ -10,7 +10,7 @@ import torch
 import torch.utils.data as data
 from torchvision import transforms
 
-from src.datasets.root_paths import DATA_ROOTS
+from  viewmaker.src.datasets.root_paths import DATA_ROOTS
 
 
 class Aircraft(data.Dataset):

@@ -14,19 +14,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 
-from src.datasets.pamap2 import PAMAP2
+from  viewmaker.src.datasets.pamap2 import PAMAP2
 
-from src.models.transfer import LogisticRegression
-from src.models import resnet_small
-from src.objectives.memory_bank import MemoryBank
+from  viewmaker.src.models.transfer import LogisticRegression
+from  viewmaker.src.models import resnet_small
+from  viewmaker.src.objectives.memory_bank import MemoryBank
 
-from src.utils.utils import l2_normalize, frozen_params, load_json
-from src.systems.image_systems import create_dataloader
-from src.objectives.simclr import SimCLRObjective
-from src.objectives.adversarial import AdversarialSimCLRLoss
-from src.objectives.infonce import NoiseConstrastiveEstimation
+from  viewmaker.src.utils.utils import l2_normalize, frozen_params, load_json
+from  viewmaker.src.systems.image_systems import create_dataloader
+from  viewmaker.src.objectives.simclr import SimCLRObjective
+from  viewmaker.src.objectives.adversarial import AdversarialSimCLRLoss
+from  viewmaker.src.objectives.infonce import NoiseConstrastiveEstimation
 
-from src.models import viewmaker
+from  viewmaker.src.models import viewmaker
 import pytorch_lightning as pl
 import wandb
 

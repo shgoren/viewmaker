@@ -1,13 +1,11 @@
 import os
 from copy import deepcopy
-from src.systems import image_systems
-from src.utils.utils import load_json
-from src.utils.setup import process_config
-from src.utils.callbacks import MoCoLRScheduler
+from viewmaker.src.systems import image_systems
+from viewmaker.src.utils.setup import process_config
 import random, torch, numpy
 
 import pytorch_lightning as pl
-import wandb
+from pytorch_lightning.loggers import WandbLogger
 
 torch.backends.cudnn.benchmark = True
 
@@ -41,7 +39,7 @@ def run(args, gpu_device=None):
     config = process_config(args.config)
     # Only override if specified.
     if gpu_device: config.gpu_device = gpu_device
-    if args.num_workers: config.data_loader_workers = args.num_workers
+    if args.num_workers is not None: config.data_loader_workers = args.num_workers
     seed_everything(config.seed)
     SystemClass = SYSTEM[config.system]
     system = SystemClass(config)
@@ -63,11 +61,10 @@ def run(args, gpu_device=None):
     ckpt_callback = pl.callbacks.ModelCheckpoint(
         os.path.join(config.exp_dir, 'checkpoints'),
         save_top_k=-1,
-        every_n_epochs=1,
+        period=1,
     )
-    callbacks.append(ckpt_callback)
 
-    wandb.init(project='viewmaker', name=config.exp_name, config=config, sync_tensorboard=True)
+    wandblogger = WandbLogger(project='viewmaker', name=config.exp_name)
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
         gpus=gpu_device,
@@ -76,13 +73,14 @@ def run(args, gpu_device=None):
         # distributed_backend=config.distributed_backend or 'dp',
         max_epochs=config.num_epochs,
         min_epochs=config.num_epochs,
-        checkpoint_callback=True,
+        checkpoint_callback=ckpt_callback,
         resume_from_checkpoint=args.ckpt or config.continue_from_checkpoint,
         profiler=args.profiler,
         precision=config.optim_params.precision or 32,
         callbacks=callbacks,
         val_check_interval=config.val_check_interval or 1.0,
         limit_val_batches=config.limit_val_batches or 1.0,
+        logger=wandblogger
     )
     trainer.fit(system)
 
@@ -108,4 +106,3 @@ if __name__ == "__main__":
     # Ensure it's a string, even if from an older config
     gpu_device = str(args.gpu_device) if args.gpu_device else None
     run(args, gpu_device=gpu_device)
-

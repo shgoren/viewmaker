@@ -10,7 +10,7 @@ from torchvision.transforms import Normalize
 from torchaudio.datasets import LIBRISPEECH
 from torch.utils.data import Dataset
 from nlpaug.augmenter.audio import AudioAugmenter
-from src.datasets.root_paths import DATA_ROOTS
+from  viewmaker.src.datasets.root_paths import DATA_ROOTS
 
 BAD_LIBRISPEECH_INDICES = [60150]
 LIBRISPEECH_MEAN = [-22.924]

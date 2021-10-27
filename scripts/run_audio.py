@@ -1,9 +1,9 @@
 import os
 import wandb
 from copy import deepcopy
-from src.systems import audio_systems
-from src.utils.utils import load_json
-from src.utils.setup import process_config
+from  viewmaker.src.systems import audio_systems
+from  viewmaker.src.utils.utils import load_json
+from  viewmaker.src.utils.setup import process_config
 import random, torch, numpy
 
 import pytorch_lightning as pl

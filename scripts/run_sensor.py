@@ -1,9 +1,9 @@
 import os
 import wandb
 from copy import deepcopy
-from src.systems import sensor_systems
-from src.utils.utils import load_json
-from src.utils.setup import process_config
+from  viewmaker.src.systems import sensor_systems
+from  viewmaker.src.utils.utils import load_json
+from  viewmaker.src.utils.setup import process_config
 import random
 import torch
 import numpy

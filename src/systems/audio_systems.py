@@ -19,21 +19,21 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torchvision
 
-from src.datasets.librispeech import LibriSpeech, LibriSpeechTwoViews, LibriSpeechTransfer
-from src.datasets.voxceleb1 import VoxCeleb1
-from src.datasets.audio_mnist import AudioMNIST
-from src.datasets.google_speech import GoogleSpeechCommands
-from src.datasets.fluent_speech import FluentSpeechCommands
-from src.models.transfer import LogisticRegression
-from src.models.resnet import resnet18
-from src.models import resnet_small
-from src.models.viewmaker import Viewmaker
-from src.objectives.memory_bank import MemoryBank
-from src.utils.utils import l2_normalize, frozen_params, free_params, load_json, compute_accuracy
-from src.systems.image_systems import create_dataloader
-from src.objectives.simclr import SimCLRObjective
-from src.objectives.adversarial import AdversarialSimCLRLoss, AdversarialNCELoss
-from src.objectives.infonce import NoiseConstrastiveEstimation
+from  viewmaker.src.datasets.librispeech import LibriSpeech, LibriSpeechTwoViews, LibriSpeechTransfer
+from  viewmaker.src.datasets.voxceleb1 import VoxCeleb1
+from  viewmaker.src.datasets.audio_mnist import AudioMNIST
+from  viewmaker.src.datasets.google_speech import GoogleSpeechCommands
+from  viewmaker.src.datasets.fluent_speech import FluentSpeechCommands
+from  viewmaker.src.models.transfer import LogisticRegression
+from  viewmaker.src.models.resnet import resnet18
+from  viewmaker.src.models import resnet_small
+from  viewmaker.src.models.viewmaker import Viewmaker
+from  viewmaker.src.objectives.memory_bank import MemoryBank
+from  viewmaker.src.utils.utils import l2_normalize, frozen_params, free_params, load_json, compute_accuracy
+from  viewmaker.src.systems.image_systems import create_dataloader
+from  viewmaker.src.objectives.simclr import SimCLRObjective
+from  viewmaker.src.objectives.adversarial import AdversarialSimCLRLoss, AdversarialNCELoss
+from  viewmaker.src.objectives.infonce import NoiseConstrastiveEstimation
 
 import pytorch_lightning as pl
 

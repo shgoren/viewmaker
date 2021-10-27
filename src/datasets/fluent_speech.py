@@ -13,8 +13,8 @@ from torchvision.transforms import Normalize
 
 from torch.utils.data import Dataset
 from nlpaug.augmenter.audio import AudioAugmenter
-from src.datasets.librispeech import WavformAugmentation, SpectrumAugmentation
-from src.datasets.root_paths import DATA_ROOTS
+from  viewmaker.src.datasets.librispeech import WavformAugmentation, SpectrumAugmentation
+from  viewmaker.src.datasets.root_paths import DATA_ROOTS
 
 FLUENTSPEECH_MEAN = [-31.809]
 FLUENTSPEECH_STDEV = [13.127]

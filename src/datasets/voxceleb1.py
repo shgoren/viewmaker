@@ -10,8 +10,8 @@ import nlpaug.augmenter.spectrogram as nas
 from torchvision.transforms import Normalize
 from torch.utils.data import Dataset
 from collections import defaultdict
-from src.datasets.librispeech import WavformAugmentation, SpectrumAugmentation
-from src.datasets.root_paths import DATA_ROOTS
+from  viewmaker.src.datasets.librispeech import WavformAugmentation, SpectrumAugmentation
+from  viewmaker.src.datasets.root_paths import DATA_ROOTS
 
 VOX_CELEB_MEAN = [-37.075]
 VOX_CELEB_STDEV = [19.776]

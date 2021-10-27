@@ -14,8 +14,8 @@ from torchvision import transforms, datasets
 from tap import Tap
 from dotmap import DotMap
 
-from src.systems.image_systems import TransferExpertSystem
-from src.utils.utils import load_json
+from  viewmaker.src.systems.image_systems import TransferExpertSystem
+from  viewmaker.src.utils.utils import load_json
 
 
 # NOTE: Replace this with the path to the CIFAR-10-C dataset
