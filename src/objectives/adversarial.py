@@ -39,9 +39,9 @@ class AdversarialSimCLRLoss(object):
     def get_loss(self):
         '''Return scalar encoder and view-maker losses for the batch'''
         simclr_loss = SimCLRObjective(self.embs1, self.embs2, self.t)
-        encoder_loss = simclr_loss.get_loss()
+        encoder_loss, encoder_acc = simclr_loss.get_loss_and_acc()
         view_maker_loss = -encoder_loss * self.view_maker_loss_weight
-        return encoder_loss, view_maker_loss
+        return encoder_loss, encoder_acc, view_maker_loss
 
 
 class AdversarialNCELoss(object):

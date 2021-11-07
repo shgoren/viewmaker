@@ -1,5 +1,4 @@
 import os
-from copy import deepcopy
 from viewmaker.src.systems import image_systems
 from viewmaker.src.utils.setup import process_config
 import random, torch, numpy
@@ -61,10 +60,11 @@ def run(args, gpu_device=None):
     ckpt_callback = pl.callbacks.ModelCheckpoint(
         os.path.join(config.exp_dir, 'checkpoints'),
         save_top_k=-1,
-        period=1,
+        period=config['copy_checkpoint_freq'],
     )
 
     wandblogger = WandbLogger(project='viewmaker', name=config.exp_name)
+    wandblogger.log_hyperparams(config)
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
         gpus=gpu_device,

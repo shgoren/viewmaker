@@ -167,10 +167,11 @@ class GaussianBlur(object):
         return x
 
 
+
 TRANSFORMS = {
     True: load_default_transforms,
     False: load_image_transforms,
     'all': load_default_transforms,
     'all_unnorm': load_default_unnorm_transforms,
-    'none': load_image_transforms, 
+    'none': load_image_transforms,
 }

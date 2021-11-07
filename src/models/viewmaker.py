@@ -15,10 +15,12 @@ ACTIVATIONS = {
     'leaky_relu': torch.nn.LeakyReLU,
 }
 
+
 class Viewmaker(torch.nn.Module):
     '''Viewmaker network that stochastically maps a multichannel 2D input to an output of the same size.'''
-    def __init__(self, num_channels=3, distortion_budget=0.05, activation='relu',  
-                clamp=True, frequency_domain=False, downsample_to=False, num_res_blocks=3):
+
+    def __init__(self, num_channels=3, distortion_budget=0.05, activation='relu',
+                 clamp=True, frequency_domain=False, downsample_to=False, num_res_blocks=3, num_views=1):
         '''Initialize the Viewmaker network.
 
         Args:
@@ -35,15 +37,16 @@ class Viewmaker(torch.nn.Module):
             num_res_blocks: Number of residual blocks to use in the network.
         '''
         super().__init__()
-        
+
         self.num_channels = num_channels
         self.num_res_blocks = num_res_blocks
         self.activation = activation
         self.clamp = clamp
         self.frequency_domain = frequency_domain
-        self.downsample_to = downsample_to 
+        self.downsample_to = downsample_to
         self.distortion_budget = distortion_budget
         self.act = ACTIVATIONS[activation]()
+        self.num_views = num_views
 
         # Initial convolution layers (+ 1 for noise filter)
         self.conv1 = ConvLayer(self.num_channels + 1, 32, kernel_size=9, stride=1)
@@ -52,20 +55,26 @@ class Viewmaker(torch.nn.Module):
         self.in2 = torch.nn.InstanceNorm2d(64, affine=True)
         self.conv3 = ConvLayer(64, 128, kernel_size=3, stride=2)
         self.in3 = torch.nn.InstanceNorm2d(128, affine=True)
-        
+
         # Residual layers have +N for added random channels
         self.res1 = ResidualBlock(128 + 1)
         self.res2 = ResidualBlock(128 + 2)
         self.res3 = ResidualBlock(128 + 3)
         self.res4 = ResidualBlock(128 + 4)
         self.res5 = ResidualBlock(128 + 5)
-        
+
         # Upsampling Layers
         self.deconv1 = UpsampleConvLayer(128 + self.num_res_blocks, 64, kernel_size=3, stride=1, upsample=2)
+        self.upres1 = ResidualBlock(64)
+        # self.upres2 = ResidualBlock(64)
         self.in4 = torch.nn.InstanceNorm2d(64, affine=True)
         self.deconv2 = UpsampleConvLayer(64, 32, kernel_size=3, stride=1, upsample=2)
+        self.upres3 = ResidualBlock(32)
+        # self.upres4 = ResidualBlock(32)
         self.in5 = torch.nn.InstanceNorm2d(32, affine=True)
-        self.deconv3 = ConvLayer(32, self.num_channels, kernel_size=9, stride=1)
+        self.deconv3 = ConvLayer(32, self.num_channels * num_views, kernel_size=9, stride=1)
+
+
 
     @staticmethod
     def zero_init(m):
@@ -98,34 +107,36 @@ class Viewmaker(torch.nn.Module):
         # Features that could be useful for other auxilary layers / losses.
         # [batch_size, 128]
         features = y.clone().mean([-1, -2])
-        
+
         for i, res in enumerate([self.res1, self.res2, self.res3, self.res4, self.res5]):
             if i < num_res_blocks:
                 y = res(self.add_noise_channel(y, bound_multiplier=bound_multiplier))
 
         y = self.act(self.in4(self.deconv1(y)))
+        y = self.upres1(y)
         y = self.act(self.in5(self.deconv2(y)))
+        y = self.upres3(y)
         y = self.deconv3(y)
 
         return y, features
-    
+
     def get_delta(self, y_pixels, eps=1e-4):
         '''Constrains the input perturbation by projecting it onto an L1 sphere'''
         distortion_budget = self.distortion_budget
-        delta = torch.tanh(y_pixels) # Project to [-1, 1]
-        avg_magnitude = delta.abs().mean([1,2,3], keepdim=True)
+        delta = torch.tanh(y_pixels)  # Project to [-1, 1]
+        avg_magnitude = delta.abs().mean([1, 2, 3], keepdim=True)
         max_magnitude = distortion_budget
         delta = delta * max_magnitude / (avg_magnitude + eps)
         return delta
 
     def forward(self, x):
+        x_orig = x
         if self.downsample_to:
             # Downsample.
-            x_orig = x
             x = torch.nn.functional.interpolate(
                 x, size=(self.downsample_to, self.downsample_to), mode='bilinear')
         y = x
-        
+
         if self.frequency_domain:
             # Input to viewmaker is in frequency domain, outputs frequency domain perturbation.
             # Uses the Discrete Cosine Transform.
@@ -133,20 +144,30 @@ class Viewmaker(torch.nn.Module):
             y = dct.dct_2d(y)
 
         y_pixels, features = self.basic_net(y, self.num_res_blocks, bound_multiplier=1)
-        delta = self.get_delta(y_pixels)
+        if self.num_views == 1:
+            result = self.project_and_add(x_orig, y_pixels)
+            return result
+        else:
+            result = []
+            for i in range(0, y_pixels.size(1), self.num_channels):
+                view = y_pixels[:, i:i + self.num_channels]
+                result.append(self.project_and_add(x_orig, view))
+            result = torch.stack(result).transpose(0, 1).reshape(-1, *view.shape[1:])
+            return result
+
+    def project_and_add(self, x, residual):
+        delta = self.get_delta(residual)
         if self.frequency_domain:
             # Compute inverse DCT from frequency domain to time domain.
             delta = dct.idct_2d(delta)
         if self.downsample_to:
             # Upsample.
-            x = x_orig
-            delta = torch.nn.functional.interpolate(delta, size=x_orig.shape[-2:], mode='bilinear')
+            delta = torch.nn.functional.interpolate(delta, size=x.shape[-2:], mode='bilinear')
 
         # Additive perturbation
         result = x + delta
         if self.clamp:
             result = torch.clamp(result, 0, 1.0)
-
         return result
 
 

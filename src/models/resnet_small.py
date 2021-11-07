@@ -113,6 +113,10 @@ def ResNet18(num_classes, num_channels=3, input_size=32):
     return ResNet(BasicBlock, [2,2,2,2], num_classes, num_channels=num_channels, 
                   input_size=input_size)
 
+def CustomResnet(num_classes, num_blocks, num_channels=3, input_size=32):
+    return ResNet(BasicBlock, num_blocks, num_classes, num_channels=num_channels,
+                  input_size=input_size)
+
 
 def ResNet34(num_classes):
     return ResNet(BasicBlock, [3,4,6,3], num_classes)

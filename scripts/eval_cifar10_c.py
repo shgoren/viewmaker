@@ -1,9 +1,6 @@
 '''Evaluates a trained (model + linear classiifer) on the CIFAR-10-C dataset.'''
 
 import os
-import copy
-import getpass
-from PIL import Image
 import numpy as np
 
 import torch
@@ -14,7 +11,7 @@ from torchvision import transforms, datasets
 from tap import Tap
 from dotmap import DotMap
 
-from  viewmaker.src.systems.image_systems import TransferExpertSystem
+from src.systems.image_systemds.image_systems import TransferExpertSystem
 from  viewmaker.src.utils.utils import load_json
 
 

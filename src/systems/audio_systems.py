@@ -5,18 +5,12 @@ include cropping, noise, pitch, and speed. We should fit this on Librispeech.
 
 import os
 import math
-import random
-import librosa
-import numpy as np
 from dotmap import DotMap
-from itertools import chain
-from sklearn.metrics import f1_score
 from collections import OrderedDict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
 import torchvision
 
 from  viewmaker.src.datasets.librispeech import LibriSpeech, LibriSpeechTwoViews, LibriSpeechTransfer
@@ -25,12 +19,11 @@ from  viewmaker.src.datasets.audio_mnist import AudioMNIST
 from  viewmaker.src.datasets.google_speech import GoogleSpeechCommands
 from  viewmaker.src.datasets.fluent_speech import FluentSpeechCommands
 from  viewmaker.src.models.transfer import LogisticRegression
-from  viewmaker.src.models.resnet import resnet18
 from  viewmaker.src.models import resnet_small
 from  viewmaker.src.models.viewmaker import Viewmaker
 from  viewmaker.src.objectives.memory_bank import MemoryBank
-from  viewmaker.src.utils.utils import l2_normalize, frozen_params, free_params, load_json, compute_accuracy
-from  viewmaker.src.systems.image_systems import create_dataloader
+from  viewmaker.src.utils.utils import l2_normalize, frozen_params, load_json, compute_accuracy
+from src.systems.image_systemds.image_systems import create_dataloader
 from  viewmaker.src.objectives.simclr import SimCLRObjective
 from  viewmaker.src.objectives.adversarial import AdversarialSimCLRLoss, AdversarialNCELoss
 from  viewmaker.src.objectives.infonce import NoiseConstrastiveEstimation

@@ -5,7 +5,6 @@ Contains PL Systems for SimCLR and Viewmaker methods (pretraining and linear eva
 """
 
 import os
-import math
 from dotmap import DotMap
 from collections import OrderedDict
 
@@ -21,7 +20,7 @@ from  viewmaker.src.models import resnet_small
 from  viewmaker.src.objectives.memory_bank import MemoryBank
 
 from  viewmaker.src.utils.utils import l2_normalize, frozen_params, load_json
-from  viewmaker.src.systems.image_systems import create_dataloader
+from src.systems.image_systemds.image_systems import create_dataloader
 from  viewmaker.src.objectives.simclr import SimCLRObjective
 from  viewmaker.src.objectives.adversarial import AdversarialSimCLRLoss
 from  viewmaker.src.objectives.infonce import NoiseConstrastiveEstimation
