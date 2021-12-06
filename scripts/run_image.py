@@ -36,6 +36,8 @@ def run(args, gpu_device=None):
     if gpu_device == 'cpu' or not gpu_device:
         gpu_device = None
     config = process_config(args.config)
+    if args.t is not None:
+        config.loss_params.t = args.t
     # Only override if specified.
     if gpu_device: config.gpu_device = gpu_device
     if args.num_workers is not None: config.data_loader_workers = args.num_workers
@@ -62,15 +64,17 @@ def run(args, gpu_device=None):
         save_top_k=-1,
         period=config['copy_checkpoint_freq'],
     )
-
-    wandblogger = WandbLogger(project='viewmaker', name=config.exp_name)
-    wandblogger.log_hyperparams(config)
+    if not args.debug:
+        wandblogger = WandbLogger(project='viewmaker', name=config.exp_name)
+        wandblogger.log_hyperparams(config)
+    else:
+        wandblogger = None
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
         gpus=gpu_device,
          # 'ddp' is usually faster, but we use 'dp' so the negative samples 
          # for the whole batch are used for the SimCLR loss
-        # distributed_backend=config.distributed_backend or 'dp',
+        distributed_backend=config.distributed_backend or 'dp',
         max_epochs=config.num_epochs,
         min_epochs=config.num_epochs,
         checkpoint_callback=ckpt_callback,
@@ -80,7 +84,8 @@ def run(args, gpu_device=None):
         callbacks=callbacks,
         val_check_interval=config.val_check_interval or 1.0,
         limit_val_batches=config.limit_val_batches or 1.0,
-        logger=wandblogger
+        logger=wandblogger,
+        row_log_interval=50
     )
     trainer.fit(system)
 
@@ -101,6 +106,8 @@ if __name__ == "__main__":
     parser.add_argument('--profiler', action='store_true')
     parser.add_argument('--ckpt', type=str, default=None)
     parser.add_argument('--num_workers', type=int, default=None)
+    parser.add_argument('--debug', action='store_true')
+    parser.add_argument('-t', type=float, default=None)
     args = parser.parse_args()
 
     # Ensure it's a string, even if from an older config

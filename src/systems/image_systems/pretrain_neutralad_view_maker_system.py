@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from itertools import chain
 
 import numpy as np
 import pytorch_lightning as pl
@@ -89,7 +90,9 @@ class PretrainNeuTraLADViewMakerSystem(pl.LightningModule):
             frequency_domain=self.config.model_params.spectral or False,
             downsample_to=self.config.model_params.viewmaker_downsample or False,
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
-            num_views=self.config.model_params.num_views or 2
+            num_views=self.config.model_params.num_views or 2,
+            masks=self.config.model_params.masks or 0,
+            project=self.config.model_params.project
         )
         return view_model
 
@@ -112,86 +115,117 @@ class PretrainNeuTraLADViewMakerSystem(pl.LightningModule):
     def forward(self, img, view=True, log=True):
         if view:
             views = self.view(img)
+            views = self.normalize(views)
         else:
             views = img
         embs = self.model(views)
-
-        if self.global_step % 200 == 0 and self.model.training and log and view:
-            log_image_cnt = (self.viewmaker.num_views+1)*3
+        views_to_log = None
+        # 50 should be the same as self.log_row_interval in training_loop
+        if (self.global_step+1) % 50 == 0 and self.model.training and log and view:
+            log_image_cnt = (self.viewmaker.num_views + 1) * 3
             # Log some example views.
             # add a frame to mark the original images
             img = F.pad(img[:, :, 1:-1, 1:-1], (1, 1, 1, 1), "constant", value=0)
             # join images together
-            views_to_log = torch.cat([views.view(-1, 2, *views.shape[1:]),
+            views_to_log = torch.cat([views.view(-1, self.viewmaker.num_views, *views.shape[1:]),
                                       img.unsqueeze(1)], dim=1) \
                 .view(-1, *views.shape[1:])
             # fix dimensions and format
             views_to_log = views_to_log.permute(0, 2, 3, 1).detach().cpu().numpy()[:log_image_cnt]
+            views_to_log = [wandb.Image((view_ * 255).astype('long'),
+                                                     caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")
+                                         for view_ in views_to_log]
+            # wandb.log()
+        return embs, views_to_log
 
-            wandb.log({"examples": [wandb.Image(view_, caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")
-                                    for view_ in views_to_log]})
-        return embs
+    def normalize(self, imgs):
+        # These numbers were computed using compute_image_dset_stats.py
+        if 'cifar' in self.config.data_params.dataset:
+            mean = torch.tensor([0.491, 0.482, 0.446], device=imgs.device)
+            std = torch.tensor([0.247, 0.243, 0.261], device=imgs.device)
+        else:
+            raise ValueError(f'Dataset normalizer for {self.config.data_params.dataset} not implemented')
+        imgs = (imgs - mean[None, :, None, None]) / std[None, :, None, None]
+        return imgs
 
     def get_enc_loss_and_acc(self, imgs):
-        embs = self.forward(imgs, log=False)
+        embs, _ = self.forward(imgs, log=False)
         embs1, embs2 = embs.view(-1, 2, *embs.shape[1:]).permute(1, 0, 2)
         loss_function = SimCLRObjective(embs1, embs2, t=self.t)
         encoder_loss, encoder_acc = loss_function.get_loss_and_acc()
         return encoder_loss, encoder_acc
 
     def get_vm_loss(self, imgs):
-        embs_orig = self.forward(imgs, view=False)
-        embs_views = self.forward(imgs, view=True)
-        embs1, embs2 = embs_views.view(-1, 2, *embs_views.shape[1:]).permute(1, 0, 2)
-        loss_function = NeuTraLADLoss(embs_orig, embs1, embs2, t=self.t)
+        bsize = imgs.shape[0]
+        embs_orig, _ = self.forward(imgs, view=False)
+        embs_views, views_to_log = self.forward(imgs, view=True)
+        embs_views = embs_views.view(bsize, -1, *embs_views.shape[1:]).permute(1, 0, 2)
+        loss_function = NeuTraLADLoss(embs_orig, embs_views, t=self.t)
         vm_loss = loss_function.get_loss()
-        return vm_loss, embs_orig
+        return vm_loss, embs_orig, views_to_log
 
-    def training_step(self, batch, batch_idx, optimizer_idx):
+    def training_step(self, batch, batch_idx):
         indices, img, img2, neg_img, _, = batch
-        encoder_loss, encoder_acc = self.get_enc_loss_and_acc(img)
-        encoder_optim, vm_optim = self.trainer.optimizers
-        encoder_loss.backward()
+        # encoder_loss, encoder_acc = self.get_enc_loss_and_acc(img)
+        # vm_optim, = self.trainer.optimizers
+        # encoder_loss.backward()
 
         # Alternate optimization steps between encoder and viewmaker.
         # Requires an extra forward + backward pass, but higher performance per step.
-        encoder_optim.step()
-        encoder_optim.zero_grad()
-        vm_optim.zero_grad()
+        # encoder_optim.step()
+        # encoder_optim.zero_grad()
+        # vm_optim.zero_grad()
 
         # compute loss for the vm
-        vm_loss, img_embs = self.get_vm_loss(img)
-        vm_loss.backward()
-        vm_optim.step()
-        vm_optim.zero_grad()
-        encoder_optim.zero_grad()
+        vm_loss, img_embs, views_to_log = self.get_vm_loss(img)
+        # vm_loss.backward(retain_graph=True)
+        # vm_optim.step()
+        # vm_optim.zero_grad()
 
         self.memory_bank.update(indices, utils.l2_normalize(img_embs, dim=1))
 
         metrics = {
-            'view_maker_loss': vm_loss,
-            'encoder_loss': encoder_loss,
-            'train_acc': encoder_acc,
-            'temperature': self.t,
+            'dcl_loss': vm_loss,
+            # 'encoder_loss': encoder_loss,
+            # 'train_acc': encoder_acc,
+            'temperature': self.t
         }
-        return {'loss': vm_loss, 'enc_loss': encoder_loss, 'log': metrics}
+
+        return {'loss': vm_loss,
+                # 'enc_loss': encoder_loss,
+                'log': metrics,
+                'views_to_log': {'example':views_to_log}}
+
+    def training_step_end(self, batch_parts):
+        # predictions from each GPU
+        views_to_log = batch_parts["views_to_log"]
+        if views_to_log['example'] is not None:
+            distributed = isinstance(views_to_log['example'][0], tuple)
+            if distributed:
+                views_to_log['example'] = [res[0] for res in views_to_log['example']]
+            wandb.log(views_to_log)
+        batch_parts.pop('views_to_log')
+        return batch_parts
 
     def backward(self, trainer, loss, optimizer, optimizer_idx):
-        pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        # pass
 
     def validation_step(self, batch, batch_idx):
         indices, img, img2, neg_img, labels, = batch
-        encoder_loss, encoder_acc = self.get_enc_loss_and_acc(img)
-        view_maker_loss, img_embs = self.get_vm_loss(img)
+        # encoder_loss, encoder_acc = self.get_enc_loss_and_acc(img)
+        view_maker_loss, img_embs, _ = self.get_vm_loss(img)
 
         num_correct, batch_size = self.get_nearest_neighbor_label(img_embs, labels)
 
         output = OrderedDict({
-            'val_loss': encoder_loss + view_maker_loss,
-            'val_encoder_loss': encoder_loss,
-            'val_view_maker_loss': view_maker_loss,
+            # 'val_loss': encoder_loss + view_maker_loss,
+            # 'val_encoder_loss': encoder_loss,
+            'val_dcl_loss': view_maker_loss,
             'temperature': self.t,
-            'val_encoder_acc': encoder_acc,
+            # 'val_encoder_acc': encoder_acc,
             'val_zero_knn_correct': torch.tensor(num_correct, dtype=float, device=self.device),
             'val_num_total': torch.tensor(batch_size, dtype=float, device=self.device),
         })
@@ -210,7 +244,7 @@ class PretrainNeuTraLADViewMakerSystem(pl.LightningModule):
         val_acc = num_correct / float(num_total)
         metrics['val_zero_knn_acc'] = val_acc
         progress_bar = {'acc': val_acc}
-        return {'val_loss': metrics['val_loss'],
+        return {'val_dcl_loss': metrics['val_dcl_loss'],
                 'log': metrics,
                 'progress_bar': progress_bar}
 
@@ -240,20 +274,22 @@ class PretrainNeuTraLADViewMakerSystem(pl.LightningModule):
         else:
             encoder_params = list(self.model.parameters()) + [self.t]
 
-        encoder_optim = torch.optim.SGD(
-            encoder_params,
-            lr=self.config.optim_params.learning_rate,
-            momentum=self.config.optim_params.momentum,
-            weight_decay=self.config.optim_params.weight_decay,
-        )
+        # encoder_optim = torch.optim.SGD(
+        #     encoder_params,
+        #     lr=self.config.optim_params.learning_rate,
+        #     momentum=self.config.optim_params.momentum,
+        #     weight_decay=self.config.optim_params.weight_decay,
+        # )
         view_optim_name = self.config.optim_params.viewmaker_optim
         view_parameters = self.viewmaker.parameters()
+        all_params = chain(view_parameters, encoder_params)
         if view_optim_name == 'adam':
             view_optim = torch.optim.Adam(
-                view_parameters, lr=self.config.optim_params.viewmaker_learning_rate or 0.001)
+                all_params,
+                lr=self.config.optim_params.viewmaker_learning_rate or 0.001)
         elif not view_optim_name or view_optim_name == 'sgd':
             view_optim = torch.optim.SGD(
-                view_parameters,
+                all_params,
                 lr=self.config.optim_params.viewmaker_learning_rate or self.config.optim_params.learning_rate,
                 momentum=self.config.optim_params.momentum,
                 weight_decay=self.config.optim_params.weight_decay,
@@ -261,7 +297,7 @@ class PretrainNeuTraLADViewMakerSystem(pl.LightningModule):
         else:
             raise ValueError(f'Optimizer {view_optim_name} not implemented')
 
-        return [encoder_optim, view_optim], []
+        return view_optim
 
     def train_dataloader(self):
         return create_dataloader(self.train_dataset, self.config, self.batch_size)

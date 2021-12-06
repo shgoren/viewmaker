@@ -36,7 +36,7 @@
         "num_view_update": 1,
         "viewmaker_optim": "adam"
     },
-    "discriminator": true,
+    "discriminator": false,
     "num_epochs": 200,
     "validate": true,
     "copy_checkpoint_freq": 20,
