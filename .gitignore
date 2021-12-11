@@ -1,8 +1,9 @@
 *DS_Store*
-.vscode
 wandb
 .log
 .npy
 data/
 .pyc
 __pycache__
+experiments/
+nohup*

@@ -10,7 +10,9 @@
     "data_params": {
         "test_url": "train-clean-100",
         "small": true,
-        "input_size": 64
+        "input_size": 64,
+        "max_length":134656,
+        "fraction":0.5
     },
     "model_params": {
         "out_dim": 128,
@@ -28,7 +30,7 @@
         "t": 0.07
     },
     "optim_params": {
-        "batch_size": 128,
+        "batch_size": 32,
         "learning_rate": 0.03,
         "momentum": 0.9,
         "weight_decay": 1e-4,

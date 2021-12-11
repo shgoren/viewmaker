@@ -124,7 +124,8 @@ class Viewmaker(torch.nn.Module):
         # bound_multiplier is a scalar or a 1D tensor of length batch_size
         batch_size = x.size(0)
         filter_size = x.size(-1)
-        shp = (batch_size, num, filter_size, filter_size)
+        # dont assume square input
+        shp = (batch_size, num, x.size(-2), filter_size)
         bound_multiplier = torch.tensor(bound_multiplier, device=x.device)
         noise = torch.rand(shp, device=x.device) * bound_multiplier.view(-1, 1, 1, 1)
         return torch.cat((x, noise), dim=1)

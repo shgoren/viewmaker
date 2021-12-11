@@ -1,0 +1,60 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    // export PYTHONPATH=${PYTHONPATH}:/disk2/ofirb
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "train-image-cifar10",
+            "type": "python",
+            "request": "launch",
+            "program": "/disk2/ofirb/viewmaker/scripts/run_image.py",
+            "justMyCode": true,
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "/disk2/ofirb"
+            },
+            "args": [
+                "/disk2/ofirb/viewmaker/config/image/pretrain_viewmaker_cifar10_simclr.json",
+                "--gpu-device" , "0",
+                "--debug"
+            ]
+        },
+        {
+            "name": "run-image-cifar10",
+            "type": "python",
+            "request": "launch",
+            "program": "/disk2/ofirb/viewmaker/scripts/run_image.py",
+            "justMyCode": true,
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "/disk2/ofirb"
+            },
+            "args": [
+                "/disk2/ofirb/viewmaker/config/image/pretrain_viewmaker_cifar10_simclr.json",
+                "--gpu-device" , "0",
+                "--debug",
+                "--test",
+                "--ckpt", "/disk2/ofirb/viewmaker/experiments/experiments/viewmaker-basic/checkpoints/epoch=180.ckpt"
+            ]
+        },
+        {
+            "name": "train-audio",
+            "type": "python",
+            "request": "launch",
+            "program": "/disk2/ofirb/viewmaker/scripts/run_audio.py",
+            "justMyCode": false,
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "/disk2/ofirb",
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "args": [
+                "/disk2/ofirb/viewmaker/config/audio/100hr_64x64_resnet18/pretrain_viewmaker_librispeech_simclr_L1_f_b0.05.json",
+                // "--debug",
+                "--gpu-device" , "1"
+            ]
+        },
+    ]
+}

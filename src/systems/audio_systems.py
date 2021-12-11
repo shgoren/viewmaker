@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-
+from torchvision.utils import make_grid
 from  viewmaker.src.datasets.librispeech import LibriSpeech, LibriSpeechTwoViews, LibriSpeechTransfer
 from  viewmaker.src.datasets.voxceleb1 import VoxCeleb1
 from  viewmaker.src.datasets.audio_mnist import AudioMNIST
@@ -23,12 +23,14 @@ from  viewmaker.src.models import resnet_small
 from  viewmaker.src.models.viewmaker import Viewmaker
 from  viewmaker.src.objectives.memory_bank import MemoryBank
 from  viewmaker.src.utils.utils import l2_normalize, frozen_params, load_json, compute_accuracy
-from src.systems.image_systemds.image_systems import create_dataloader
+from  viewmaker.src.systems.image_systemds.image_systems import create_dataloader
 from  viewmaker.src.objectives.simclr import SimCLRObjective
 from  viewmaker.src.objectives.adversarial import AdversarialSimCLRLoss, AdversarialNCELoss
 from  viewmaker.src.objectives.infonce import NoiseConstrastiveEstimation
 
 import pytorch_lightning as pl
+import wandb
+from pytorch_lightning.loggers import WandbLogger
 
 
 class PretrainExpertInstDiscSystem(pl.LightningModule):
@@ -361,14 +363,16 @@ class PretrainViewMakerSimCLRSystem(PretrainExpertSimCLRSystem):
     def __init__(self, config):
         super().__init__(config)
         self.view = self.create_viewmaker()
-
+        
     def create_datasets(self):
         train_dataset = LibriSpeechTwoViews(
             train=True, 
             spectral_transforms=False,
             wavform_transforms=False,
             small=self.config.data_params.small,
-            input_size=self.config.data_params.input_size,
+            input_size=self.config.data_params.input_size,           
+            max_length=self.config.data_params.max_length,
+            fraction=self.config.data_params.fraction
         )
         val_dataset = LibriSpeech(
             train=False, 
@@ -377,7 +381,10 @@ class PretrainViewMakerSimCLRSystem(PretrainExpertSimCLRSystem):
             small=self.config.data_params.small,
             test_url=self.config.data_params.test_url,
             input_size=self.config.data_params.input_size,
+            max_length=self.config.data_params.max_length,
+            fraction=self.config.data_params.fraction
         )
+
         return train_dataset, val_dataset
 
     def create_viewmaker(self):
@@ -432,6 +439,31 @@ class PretrainViewMakerSimCLRSystem(PretrainExpertSimCLRSystem):
             'view1_embs': self.model(view1),
             'view2_embs': self.model(view2),
         }
+
+        if self.global_step % 500 == 0:
+            # Log some example views.
+            print('logging spectograms and audio')
+            grid = make_grid(torch.cat([inputs[:10].unsqueeze(0),view1[:10].unsqueeze(0)-inputs[:10].unsqueeze(0),view1[:10].unsqueeze(0)]).view(-1,inputs.shape[1],inputs.shape[3],inputs.shape[2]),nrow=10)
+            sample_rate=16000
+            original_inverted = self.train_dataset.spectogram_to_audio(inputs[0].detach().cpu(),sample_rate)
+            view_inverted = self.train_dataset.spectogram_to_audio(view1[0].detach().cpu(),sample_rate)
+            
+            if isinstance (self.logger,WandbLogger):
+                wandb.log({"audio_spectograms":wandb.Image(grid, caption=f"Epoch: {self.current_epoch}, Step {self.global_step}") },step=self.global_step)
+                wandb.log({"audio_original_inverted": wandb.Audio(original_inverted, caption="audio_original_inverted", sample_rate=sample_rate)},step=self.global_step)
+                wandb.log({"audio_view_inverted": wandb.Audio(view_inverted, caption="audio_view_inverted", sample_rate=sample_rate)},step=self.global_step)
+
+            else:
+                self.logger.experiment.add_image('audio_spectograms', grid, self.global_step)
+                self.logger.experiment.add_audio('audio_original_inverted', original_inverted , self.global_step,sample_rate=sample_rate)
+                self.logger.experiment.add_audio('audio_view_inverted',view_inverted , self.global_step,sample_rate=sample_rate)
+            
+            
+            print('Finished logging..')
+
+        return emb_dict
+
+
         return emb_dict
 
     def get_losses_for_batch(self, emb_dict):
@@ -441,8 +473,7 @@ class PretrainViewMakerSimCLRSystem(PretrainExpertSimCLRSystem):
             t=self.config.loss_params.t,
             view_maker_loss_weight=self.config.loss_params.view_maker_loss_weight
         )
-        encoder_loss, view_maker_loss = loss_function.get_loss()
-        
+        encoder_loss, encoder_acc, view_maker_loss = loss_function.get_loss()
         with torch.no_grad():
             new_data_memory = l2_normalize(emb_dict['view1_embs'].detach(), dim=1)
             self.memory_bank.update(emb_dict['indices'], new_data_memory)
@@ -477,17 +508,19 @@ class PretrainViewMakerSimCLRSystem(PretrainExpertSimCLRSystem):
 
         if optimizer_idx == 0:
             metrics = {
-                'encoder_loss': encoder_loss,
+                'encoder_loss': encoder_loss.detach(),
             }
+            self.log('encoder_loss', encoder_loss, on_step=False, on_epoch=True)
             return {'loss': encoder_loss, 'log': metrics}
         else:
             # update the bound allowed for view
             self.view.bound_magnitude = self.get_view_bound_magnitude()
 
             metrics = {
-                'view_maker_loss': view_maker_loss,
+                'view_maker_loss': view_maker_loss.detach(),
                 # 'view_bound_magnitude': self.view.bound_magnitude,
             }
+            self.log('view_maker_loss', view_maker_loss, on_step=False, on_epoch=True)
             return {'loss': view_maker_loss, 'log': metrics}
 
     def validation_step(self, batch, batch_idx):
@@ -509,6 +542,7 @@ class PretrainViewMakerSimCLRSystem(PretrainExpertSimCLRSystem):
         val_acc = num_correct / float(num_total)
         metrics['val_acc'] = val_acc
         progress_bar = {'acc': val_acc}
+        self.log('val_acc', val_acc, on_step=False, on_epoch=True)
         return {'log': metrics, 'val_acc': val_acc, 'progress_bar': progress_bar}
 
 

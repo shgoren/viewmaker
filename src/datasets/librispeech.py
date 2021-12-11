@@ -10,7 +10,7 @@ from torchvision.transforms import Normalize
 from torchaudio.datasets import LIBRISPEECH
 from torch.utils.data import Dataset
 from nlpaug.augmenter.audio import AudioAugmenter
-from  viewmaker.src.datasets.root_paths import DATA_ROOTS
+from viewmaker.src.datasets.root_paths import DATA_ROOTS
 
 BAD_LIBRISPEECH_INDICES = [60150]
 LIBRISPEECH_MEAN = [-22.924]
@@ -31,6 +31,7 @@ class LibriSpeech(Dataset):
             input_size=224,
             normalize_mean=LIBRISPEECH_MEAN,
             normalize_stdev=LIBRISPEECH_STDEV,
+            fraction = 1.0
         ):
         super().__init__()
         # choose to either apply augmentation at wavform or at augmentation level
@@ -49,6 +50,9 @@ class LibriSpeech(Dataset):
         else:
             self.dataset = LIBRISPEECH(root, url=test_url, download=True,
                                         folder_in_archive='LibriSpeech')
+
+        #add ability for subseting
+        self.dataset._walker = self.dataset._walker[:int(fraction*len(self.dataset._walker))]
 
         self.spectral_transforms = spectral_transforms
         self.wavform_transforms = wavform_transforms
@@ -145,7 +149,8 @@ class LibriSpeech(Dataset):
         spectrum = librosa.feature.melspectrogram(
             padded,
             sample_rate,
-            hop_length=hop_length_dict[self.input_size],
+            # removed because cant reproduce signal with this hop
+            # hop_length=hop_length_dict[self.input_size],
             n_mels=self.input_size,
         )
         if self.spectral_transforms:  # apply time and frequency masks
@@ -164,8 +169,16 @@ class LibriSpeech(Dataset):
 
         normalize = Normalize(self.normalize_mean, self.normalize_stdev)
         spectrum = normalize(spectrum)
-
+        
         return index, spectrum, speaker_id
+    
+    # invers spectogram back to audio for view visualization
+    def spectogram_to_audio(self,spectrum,sample_rate):
+        unnormalized = (spectrum*self.normalize_stdev[0])+self.normalize_mean[0]
+        spectrum_base = librosa.feature.inverse.db_to_power(unnormalized[0])**0.5
+        inverted_audio = librosa.feature.inverse.mel_to_audio(spectrum_base.numpy(),sample_rate)
+        return inverted_audio
+
 
     def __len__(self):
         if self.train and not self.small:
