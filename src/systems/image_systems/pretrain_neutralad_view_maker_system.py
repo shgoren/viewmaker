@@ -92,7 +92,7 @@ class PretrainNeuTraLADViewMakerSystem(pl.LightningModule):
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
             num_views=self.config.model_params.num_views or 2,
             masks=self.config.model_params.masks or 0,
-            project=self.config.model_params.project
+            use_budget=self.config.model_params.use_budget
         )
         return view_model
 

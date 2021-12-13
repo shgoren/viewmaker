@@ -1,6 +1,6 @@
 {
     "exp_base": null,
-    "exp_name": "viewmaker",
+    "exp_name": "viewmaker-disc | pretrained simclr encoder",
     "system": "PretrainViewMakerSystem",
     "cuda": true,
     "gpu_device": 0,
@@ -11,14 +11,19 @@
         "dataset": "cifar10"
     },
     "model_params": {
-        "out_dim": 100,
+        "orig_out_dim": 100,
+        "out_dim": 1000,
         "resnet": true,
         "resnet_version": "resnet18",
         "resnet_small": true,
         "projection_head": false,
         "noise_dim": 100,
         "view_bound_magnitude": 0.05,
-        "num_res_blocks": 3
+        "num_res_blocks": 3,
+        "pretrained": true
+    },
+    "disc": {
+        "acc_guard": true
     },
     "loss_params": {
         "objective": "AdversarialSimCLRLoss",
@@ -36,7 +41,7 @@
         "num_view_update": 1,
         "viewmaker_optim": "adam"
     },
-    "discriminator": false,
+    "discriminator": true,
     "num_epochs": 200,
     "validate": true,
     "copy_checkpoint_freq": 20,

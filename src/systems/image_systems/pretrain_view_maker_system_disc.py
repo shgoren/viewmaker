@@ -9,14 +9,17 @@ import torchvision
 import wandb
 
 from viewmaker.src.datasets import datasets
+from viewmaker.src.gans.tiny_pix2pix import TinyP2PDiscriminator
 from viewmaker.src.models import resnet_small
 from viewmaker.src.models import viewmaker
 from viewmaker.src.objectives.adversarial import AdversarialSimCLRLoss, AdversarialNCELoss
 from viewmaker.src.objectives.memory_bank import MemoryBank
 from viewmaker.src.utils import utils
 from viewmaker.src.systems.image_systems.utils import create_dataloader
+from pl_bolts.models.self_supervised import SimCLR
 
-class PretrainViewMakerSystem(pl.LightningModule):
+
+class PretrainViewMakerSystemDisc(pl.LightningModule):
     '''Pytorch Lightning System for self-supervised pretraining
     with adversarially generated views.
     '''
@@ -36,7 +39,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
         train_labels = self.train_dataset.dataset.targets
         self.train_ordered_labels = np.array(train_labels)
 
-        self.model = self.create_encoder()
+        self.model = self.load_pretrained_encoder()
         self.viewmaker = self.create_viewmaker()
         if config.discriminator:
             self.disc = self.create_discriminator()
@@ -72,8 +75,15 @@ class PretrainViewMakerSystem(pl.LightningModule):
             )
         return encoder_model
 
+    def load_pretrained_encoder(self, freeze=True):
+        weight_path = 'https://pl-bolts-weights.s3.us-east-2.amazonaws.com/simclr/bolts_simclr_imagenet/simclr_imagenet.ckpt'
+        simclr = SimCLR.load_from_checkpoint(weight_path, strict=False)
+        if freeze:
+            simclr.freeze()
+        return simclr
+
     def create_discriminator(self):
-        return resnet_small.ResNet18(2)
+        return TinyP2PDiscriminator()
 
     def create_viewmaker(self):
         view_model = viewmaker.Viewmaker(
@@ -292,19 +302,31 @@ class PretrainViewMakerSystem(pl.LightningModule):
                 'log': metrics,
                 'progress_bar': progress_bar}
 
-    def optimizer_step(self, current_epoch, batch_nb, optimizer, optimizer_idx,
-                       second_order_closure=None, on_tpu=False, using_native_amp=False, using_lbfgs=False):
-        if not self.config.optim_params.viewmaker_freeze_epoch:
-            super().optimizer_step(current_epoch, batch_nb, optimizer, optimizer_idx)
-            return
-
+    def optimizer_step(
+            self,
+            epoch,
+            batch_idx,
+            optimizer,
+            optimizer_idx,
+            optimizer_closure,
+            on_tpu=False,
+            using_native_amp=False,
+            using_lbfgs=False,
+    ):
+        # update viwmaker every step
         if optimizer_idx == 0:
-            optimizer.step()
-            optimizer.zero_grad()
-        elif current_epoch < self.config.optim_params.viewmaker_freeze_epoch:
-            # Optionally freeze the viewmaker at a certain pretraining epoch.
-            optimizer.step()
-            optimizer.zero_grad()
+            super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
+                                   using_native_amp, using_lbfgs)
+
+        if optimizer_idx == 1 or optimizer_idx == 2:
+            if self.config.optim_params.viewmaker_freeze_epoch and \
+                    self.current_epoch > self.config.optim_params.viewmaker_freeze_epoch:
+                # freeze viewmaker after a certain number of epochs
+                # call the closure by itself to run `training_step` + `backward` without an optimizer step
+                optimizer_closure()
+            else:
+                super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
+                                       using_native_amp, using_lbfgs)
 
     def configure_optimizers(self):
         # Optimize temperature with encoder.
