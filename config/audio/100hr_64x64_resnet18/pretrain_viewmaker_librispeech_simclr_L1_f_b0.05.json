@@ -8,11 +8,11 @@
     "seed": 1337,
     "data_loader_workers": 16,
     "data_params": {
-        "test_url": "train-clean-100",
+        "test_url": "dev-clean",
         "small": true,
         "input_size": 64,
         "max_length":134656,
-        "fraction":0.5
+        "fraction":1
     },
     "model_params": {
         "out_dim": 128,

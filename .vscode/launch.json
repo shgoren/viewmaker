@@ -48,7 +48,7 @@
             "console": "integratedTerminal",
             "env": {
                 "PYTHONPATH": "/disk2/ofirb",
-                "CUDA_VISIBLE_DEVICES": "1"
+                "CUDA_VISIBLE_DEVICES": "5"
             },
             "args": [
                 "/disk2/ofirb/viewmaker/config/audio/100hr_64x64_resnet18/pretrain_viewmaker_librispeech_simclr_L1_f_b0.05.json",

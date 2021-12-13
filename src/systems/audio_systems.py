@@ -440,27 +440,24 @@ class PretrainViewMakerSimCLRSystem(PretrainExpertSimCLRSystem):
             'view2_embs': self.model(view2),
         }
 
-        if self.global_step % 500 == 0:
+        if self.global_step % 2000 == 2000-1:
             # Log some example views.
-            print('logging spectograms and audio')
             grid = make_grid(torch.cat([inputs[:10].unsqueeze(0),view1[:10].unsqueeze(0)-inputs[:10].unsqueeze(0),view1[:10].unsqueeze(0)]).view(-1,inputs.shape[1],inputs.shape[3],inputs.shape[2]),nrow=10)
             sample_rate=16000
             original_inverted = self.train_dataset.spectogram_to_audio(inputs[0].detach().cpu(),sample_rate)
             view_inverted = self.train_dataset.spectogram_to_audio(view1[0].detach().cpu(),sample_rate)
             
             if isinstance (self.logger,WandbLogger):
-                wandb.log({"audio_spectograms":wandb.Image(grid, caption=f"Epoch: {self.current_epoch}, Step {self.global_step}") },step=self.global_step)
-                wandb.log({"audio_original_inverted": wandb.Audio(original_inverted, caption="audio_original_inverted", sample_rate=sample_rate)},step=self.global_step)
-                wandb.log({"audio_view_inverted": wandb.Audio(view_inverted, caption="audio_view_inverted", sample_rate=sample_rate)},step=self.global_step)
+                cap = f"Epoch: {self.current_epoch}, Step {self.global_step}"
+                wandb.log({"audio_spectograms":wandb.Image(grid, caption=cap) })
+                wandb.log({"audio_original_inverted": wandb.Audio(original_inverted, caption=cap, sample_rate=sample_rate)})
+                wandb.log({"audio_view_inverted": wandb.Audio(view_inverted, caption=cap, sample_rate=sample_rate)})
 
             else:
                 self.logger.experiment.add_image('audio_spectograms', grid, self.global_step)
                 self.logger.experiment.add_audio('audio_original_inverted', original_inverted , self.global_step,sample_rate=sample_rate)
                 self.logger.experiment.add_audio('audio_view_inverted',view_inverted , self.global_step,sample_rate=sample_rate)
             
-            
-            print('Finished logging..')
-
         return emb_dict
 
 
