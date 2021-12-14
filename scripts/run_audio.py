@@ -1,15 +1,19 @@
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "5"
-
+os.environ["OMP_NUM_THREADS"] = "3"
+os.environ["MKL_NUM_THREADS"] = "3"
+import random, torch, numpy
+torch.set_num_threads(3)
 import wandb
 from copy import deepcopy
 from  viewmaker.src.systems import audio_systems
 from  viewmaker.src.utils.utils import load_json
 from  viewmaker.src.utils.setup import process_config
-import random, torch, numpy
+
 from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
 
 import pytorch_lightning as pl
+
 
 SYSTEM = {
     'PretrainExpertInstDiscSystem': audio_systems.PretrainExpertInstDiscSystem,
