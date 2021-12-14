@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import wandb
+from torch import autograd
+from torchvision import models
 
 from viewmaker.src.datasets import datasets
 from viewmaker.src.models import resnet_small
@@ -37,19 +39,30 @@ class PretrainViewMakerSystem(pl.LightningModule):
         train_labels = self.train_dataset.dataset.targets
         self.train_ordered_labels = np.array(train_labels)
 
-        self.model = self.create_encoder()
-        self.viewmaker = self.create_viewmaker()
-        if config.discriminator:
-            self.disc = self.create_discriminator()
+        self.budget_sched = config.model_params.budget_sched
+        self.budget_steps = np.linspace(0.0001, 1, 400)
+
+        if config.model_params.pretrained:
+            self.model = self.load_pretrained_encoder()
         else:
-            self.disc = None
-        self.disc_pause_steps = 0
+            self.model = self.create_encoder()
+        self.viewmaker = self.create_viewmaker()
 
         # Used for computing knn validation accuracy.
         self.memory_bank = MemoryBank(
             len(self.train_dataset),
             self.config.model_params.out_dim,
         )
+
+
+    def get_budget(self):
+        if not self.budget_sched:
+            return self.distortion_budget
+        idx = self.global_step // 1000
+        if idx < len(self.budget_steps):
+            return self.budget_steps[idx]
+        else:
+            return self.budget_steps[-1]
 
     def create_encoder(self):
         '''Create the encoder model.'''
@@ -74,9 +87,9 @@ class PretrainViewMakerSystem(pl.LightningModule):
             )
         return encoder_model
 
-    def create_discriminator(self):
-        return resnet_small.CustomResnet(1, [1, 1, 1, 1])
-        # return resnet_small.ResNet18(1)
+    def load_pretrained_encoder(self, freeze=True):
+        resnet18 = models.resnet18(pretrained=True)
+        return resnet18
 
     def create_viewmaker(self):
         view_model = viewmaker.Viewmaker(
@@ -87,8 +100,12 @@ class PretrainViewMakerSystem(pl.LightningModule):
             frequency_domain=self.config.model_params.spectral or False,
             downsample_to=self.config.model_params.viewmaker_downsample or False,
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
+            use_budget=True
         )
         return view_model
+
+    def create_dcgan_generator(self):
+        pass
 
     def view(self, imgs):
         if 'Expert' in self.config.system:
@@ -129,6 +146,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
                 'view1_embs': self.model(view1),
                 'orig_embs': self.get_repr(img)
             }
+
         elif self.loss_name == 'AdversarialSimCLRLoss':
             if self.config.model_params.double_viewmaker:
                 view1, view2 = self.view(img)
@@ -141,21 +159,16 @@ class PretrainViewMakerSystem(pl.LightningModule):
                 'view2_embs': self.model(view2),
                 'orig_embs': self.get_repr(img)
             }
-            if self.disc is not None:
-                emb_dict["dis_real_score"] = F.sigmoid(self.disc(img))
-                emb_dict["dis_fake_score"] = F.sigmoid(
-                    torch.cat([self.disc(view1.detach()), self.disc(view2.detach())], dim=0))
-                with torch.no_grad():
-                    emb_dict["view_fake_score"] = F.sigmoid(torch.cat([self.disc(view1), self.disc(view2)], dim=0))
         else:
             raise ValueError(f'Unimplemented loss_name {self.loss_name}.')
 
         if self.global_step % 200 == 0:
             # Log some example views.
             views_to_log = view1.permute(0, 2, 3, 1).detach().cpu().numpy()[:10]
-            wandb.log({"examples": [
-                wandb.Image(view, caption=f"Epoch: {self.current_epoch}, Step {self.global_step}, Train {train}") for
-                view in views_to_log]})
+            if not self.config.debug:
+                wandb.log({"examples": [
+                    wandb.Image(view, caption=f"Epoch: {self.current_epoch}, Step {self.global_step}, Train {train}") for
+                    view in views_to_log]})
 
         return emb_dict
 
@@ -186,21 +199,6 @@ class PretrainViewMakerSystem(pl.LightningModule):
         else:
             raise Exception(f'Objective {self.loss_name} is not supported.')
 
-        if self.disc is None:
-            disc_loss = 0
-            disc_acc = 0
-            view_adv_acc = 0
-        else:
-            dis_real_score = emb_dict['dis_real_score']
-            dis_fake_score = emb_dict['dis_fake_score']
-            view_fake_score = emb_dict['view_fake_score']
-            disc_loss = F.binary_cross_entropy(dis_real_score, torch.ones_like(dis_real_score)) + \
-                        F.binary_cross_entropy(dis_fake_score, torch.zeros_like(dis_fake_score))
-            disc_acc = torch.cat((dis_real_score > 0.5, dis_fake_score <= 0.5), dim=0).float().mean()
-            view_fake_loss = F.binary_cross_entropy(view_fake_score, torch.ones_like(view_fake_score))
-            view_adv_acc = (dis_fake_score >= 0.5).float().mean()
-            view_maker_loss = view_maker_loss + view_fake_loss * 6
-
         # Update memory bank.
         if train:
             with torch.no_grad():
@@ -210,8 +208,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
                 else:
                     new_data_memory = utils.l2_normalize(img_embs, dim=1)
                     self.memory_bank.update(emb_dict['indices'], new_data_memory)
-
-        return encoder_loss, encoder_acc, view_maker_loss, view_adv_acc, disc_loss, disc_acc
+        return encoder_loss, encoder_acc, view_maker_loss
 
     def get_nearest_neighbor_label(self, img_embs, labels):
         '''
@@ -233,46 +230,63 @@ class PretrainViewMakerSystem(pl.LightningModule):
         return num_correct, batch_size
 
     def training_step(self, batch, batch_idx, optimizer_idx):
+        # with autograd.detect_anomaly():
         emb_dict = self.forward(batch)
         emb_dict['optimizer_idx'] = torch.tensor(optimizer_idx, device=self.device)
         return emb_dict
 
     def training_step_end(self, emb_dict):
-        encoder_loss, encoder_acc, view_maker_loss, view_adv_acc, disc_loss, disc_acc = self.get_losses_for_batch(
-            emb_dict, train=True)
+        encoder_loss, encoder_acc, view_maker_loss = self.get_losses_for_batch(emb_dict, train=True)
 
-        # Handle Tensor (dp) and int (ddp) cases
-        if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
-            optimizer_idx = emb_dict['optimizer_idx']
-        else:
-            optimizer_idx = emb_dict['optimizer_idx'][0]
+        if self.budget_sched:
+            self.viewmaker.distortion_budget = self.get_budget()
+
+        # assuming they fixed taht in new versions
+        # # Handle Tensor (dp) and int (ddp) cases
+        # if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
+        optimizer_idx = emb_dict['optimizer_idx']
+        # else:
+        #     optimizer_idx = emb_dict['optimizer_idx'][0]
+
         if optimizer_idx == 0:
             metrics = {
-                'encoder_loss': encoder_loss, 'temperature': self.t, "train_acc": encoder_acc
+                'encoder_loss': encoder_loss, "train_acc": encoder_acc
             }
-            return {'loss': encoder_loss, 'log': metrics}
+            loss = encoder_loss
         elif optimizer_idx == 1:
             metrics = {
                 'view_maker_loss': view_maker_loss,
-                'view_maker_adv_acc': view_adv_acc
             }
-            return {'loss': view_maker_loss, 'log': metrics}
-        else:
-            metrics = {
-                'disc_acc': disc_acc,
-                'disc_loss': disc_loss,
-            }
-            if view_adv_acc < 0.4:
-                if self.disc_pause_steps == 0:
-                    self.disc_pause_steps = 4
-                    ret = {'loss': disc_loss, 'log': metrics}
-                    return ret
-                self.disc_pause_steps -= 1
-            ret = {'loss': torch.tensor(0.0, device=disc_loss.device, requires_grad=True), 'log': metrics}
-            return ret
+            loss = view_maker_loss
 
+        self.log_dict(metrics)
+        return loss
 
+    def optimizer_step(
+            self,
+            epoch,
+            batch_idx,
+            optimizer,
+            optimizer_idx,
+            optimizer_closure,
+            on_tpu=False,
+            using_native_amp=False,
+            using_lbfgs=False,
+    ):
+        # update viwmaker every step
+        if optimizer_idx == 0:
+            super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
+                                   using_native_amp, using_lbfgs)
 
+        if optimizer_idx == 1:
+            if self.config.optim_params.viewmaker_freeze_epoch and \
+                    self.current_epoch > self.config.optim_params.viewmaker_freeze_epoch:
+                # freeze viewmaker after a certain number of epochs
+                # call the closure by itself to run `training_step` + `backward` without an optimizer step
+                optimizer_closure()
+            else:
+                super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
+                                       using_native_amp, using_lbfgs)
 
     def validation_step(self, batch, batch_idx):
         emb_dict = self.forward(batch, train=False)
@@ -282,18 +296,13 @@ class PretrainViewMakerSystem(pl.LightningModule):
             _, img, _, _, _ = batch
             img_embs = self.get_repr(img)  # Need encoding of image without augmentations (only normalization).
         labels = batch[-1]
-        encoder_loss, encoder_acc, view_maker_loss, view_adv_acc, disc_loss, disc_acc = self.get_losses_for_batch(
+        encoder_loss, encoder_acc, view_maker_loss = self.get_losses_for_batch(
             emb_dict, train=False)
 
         num_correct, batch_size = self.get_nearest_neighbor_label(img_embs, labels)
         output = OrderedDict({
-            'val_loss': encoder_loss + view_maker_loss + disc_loss,
             'val_encoder_loss': encoder_loss,
-            'val_disc_loss': disc_loss,
-            'val_disc_acc': disc_acc,
             'val_view_maker_loss': view_maker_loss,
-            'val_view_adv_acc': view_adv_acc,
-            'val_encoder_acc': encoder_acc,
             'val_zero_knn_correct': torch.tensor(num_correct, dtype=float, device=self.device),
             'val_num_total': torch.tensor(batch_size, dtype=float, device=self.device),
         })
@@ -312,23 +321,9 @@ class PretrainViewMakerSystem(pl.LightningModule):
         val_acc = num_correct / float(num_total)
         metrics['val_zero_knn_acc'] = val_acc
         progress_bar = {'acc': val_acc}
-        return {'val_loss': metrics['val_loss'],
-                'log': metrics,
+        self.log_dict(metrics)
+        return {'val_enc_loss': metrics['val_encoder_loss'],
                 'progress_bar': progress_bar}
-
-    def optimizer_step(self, current_epoch, batch_nb, optimizer, optimizer_idx,
-                       second_order_closure=None, on_tpu=False, using_native_amp=False, using_lbfgs=False):
-        if not self.config.optim_params.viewmaker_freeze_epoch:
-            super().optimizer_step(current_epoch, batch_nb, optimizer, optimizer_idx)
-            return
-
-        if optimizer_idx == 0:
-            optimizer.step()
-            optimizer.zero_grad()
-        elif current_epoch < self.config.optim_params.viewmaker_freeze_epoch:
-            # Optionally freeze the viewmaker at a certain pretraining epoch.
-            optimizer.step()
-            optimizer.zero_grad()
 
     def configure_optimizers(self):
         # Optimize temperature with encoder.
@@ -360,14 +355,6 @@ class PretrainViewMakerSystem(pl.LightningModule):
 
         enc_list = [encoder_optim, view_optim]
 
-        if self.disc is not None:
-            disc_optim = torch.optim.SGD(
-                self.disc.parameters(),
-                lr=self.config.optim_params.disc_learning_rate,
-                momentum=self.config.optim_params.momentum,
-                weight_decay=self.config.optim_params.weight_decay,
-            )
-            enc_list.append(disc_optim)
         return enc_list, []
 
     def train_dataloader(self):

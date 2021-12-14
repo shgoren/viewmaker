@@ -36,6 +36,9 @@ def run(args, gpu_device=None):
     if gpu_device == 'cpu' or not gpu_device:
         gpu_device = None
     config = process_config(args.config)
+    config.debug = args.debug
+    if args.exp_name is not None:
+        config.exp_name = args.exp_name
     if args.t is not None:
         config.loss_params.t = args.t
     # Only override if specified.
@@ -62,8 +65,10 @@ def run(args, gpu_device=None):
     ckpt_callback = pl.callbacks.ModelCheckpoint(
         os.path.join(config.exp_dir, 'checkpoints'),
         save_top_k=-1,
-        period=config['copy_checkpoint_freq'],
+        every_n_epochs=config['copy_checkpoint_freq'],
     )
+    callbacks.append(ckpt_callback)
+
     if not args.debug:
         wandblogger = WandbLogger(project='viewmaker', name=config.exp_name)
         wandblogger.log_hyperparams(config)
@@ -71,13 +76,13 @@ def run(args, gpu_device=None):
         wandblogger = None
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
-        gpus=gpu_device,
+        gpus=len(gpu_device),
          # 'ddp' is usually faster, but we use 'dp' so the negative samples 
          # for the whole batch are used for the SimCLR loss
-        distributed_backend=config.distributed_backend or 'dp',
+        # distributed_backend=config.distributed_backend or 'dp',
         max_epochs=config.num_epochs,
         min_epochs=config.num_epochs,
-        checkpoint_callback=ckpt_callback,
+        checkpoint_callback=True,
         resume_from_checkpoint=args.ckpt or config.continue_from_checkpoint,
         profiler=args.profiler,
         precision=config.optim_params.precision or 32,
@@ -85,7 +90,7 @@ def run(args, gpu_device=None):
         val_check_interval=config.val_check_interval or 1.0,
         limit_val_batches=config.limit_val_batches or 1.0,
         logger=wandblogger,
-        row_log_interval=50
+        log_every_n_steps=50
     )
     trainer.fit(system)
 
@@ -108,8 +113,10 @@ if __name__ == "__main__":
     parser.add_argument('--num_workers', type=int, default=None)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('-t', type=float, default=None)
+    parser.add_argument('--exp_name', type=str, default=None)
     args = parser.parse_args()
 
     # Ensure it's a string, even if from an older config
     gpu_device = str(args.gpu_device) if args.gpu_device else None
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_device)
     run(args, gpu_device=gpu_device)
