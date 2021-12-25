@@ -69,11 +69,10 @@ class ResNet(nn.Module):
         self.conv1 = nn.Conv2d(num_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
-        # self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
-        # self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
-        # self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        # fc_input_size = 512 * block.expansion * (4 if input_size == 64 else 1)
-        fc_input_size = 1024
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
+        fc_input_size = 512 * block.expansion * (4 if input_size == 64 else 1)
         self.fc = nn.Linear(fc_input_size, num_classes)
 
     def _make_layer(self, block, planes, num_blocks, stride):
@@ -93,16 +92,16 @@ class ResNet(nn.Module):
         out = self.layer1(out)
         if layer == 2:
             return out
-        # out = self.layer2(out)
-        # if layer == 3:
-        #     return out
-        # out = self.layer3(out)
-        # if layer == 4:
-        #     return out
-        # out = self.layer4(out)
-        # if layer == 5:
-        #     return out
-        out = F.avg_pool2d(out, 8)
+        out = self.layer2(out)
+        if layer == 3:
+            return out
+        out = self.layer3(out)
+        if layer == 4:
+            return out
+        out = self.layer4(out)
+        if layer == 5:
+            return out
+        out = F.avg_pool2d(out, 4)
         out = out.view(out.size(0), -1)
         if layer == 6:
             return out

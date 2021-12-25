@@ -53,7 +53,8 @@ class Viewmaker(torch.nn.Module):
         self.masks = masks
 
         self.feature_extraction = nn.Sequential(
-            ConvLayer(self.num_channels + 1, 32, kernel_size=9, stride=1),
+            # ConvLayer(self.num_channels + 1, 32, kernel_size=9, stride=1),
+            ConvLayer(self.num_channels, 32, kernel_size=9, stride=1),
             torch.nn.InstanceNorm2d(32, affine=True),
             self.act(),
             ConvLayer(32, 64, kernel_size=3, stride=2),
@@ -112,7 +113,7 @@ class Viewmaker(torch.nn.Module):
         if num_res_blocks not in list(range(6)):
             raise ValueError(f'num_res_blocks must be in {list(range(6))}, got {num_res_blocks}.')
 
-        y = self.add_noise_channel(y, bound_multiplier=bound_multiplier)
+        # y = self.add_noise_channel(y, bound_multiplier=bound_multiplier)
         f = self.feature_extraction(y)
 
         # Features that could be useful for other auxilary layers / losses.
@@ -177,11 +178,39 @@ class Viewmaker(torch.nn.Module):
         result = torch.stack(result).transpose(0, 1).reshape(-1, *result[0].shape[1:])
         return result
 
+    def get_mask_delta(self, y_pixels):
+        """
+        Constrains the input perturbation by projecting it onto an L1 sphere
+        :param y_pixels: (b,v,h,w)
+        :param eps:
+        :return:
+        """
+
+        distortion_budget = self.distortion_budget
+        delta = torch.sigmoid(y_pixels)  # Project to [0, 1]
+        if self.use_budget:
+            avg_magnitude = delta.mean([1, 2, 3], keepdim=True)
+            max_magnitude = distortion_budget
+            delta = 1-( max_magnitude + delta - avg_magnitude )
+            # delta = 1-((1-delta)*max_magnitude/avg_magnitude)
+        return delta
+# Im = 1-((1-image)*budget/average(1-image))
     def apply_learned_mask(self, x, mask):
-        delta = self.get_delta(mask) # I think this is in [-1,1] but this needs checking
-        mask = delta + 1  # in [0,2]
-        res = x * mask
-        res = torch.clamp(res, 0, 1)
+        delta = self.get_mask_delta(mask[:,:1])
+        # delta_min = delta.view(b,h*w).min(1,keepdim=True)[0].view(b,1,1,1)
+        # delta_max = delta.view(b,h*w).max(1,keepdim=True)[0].view(b,1,1,1)
+
+        # mask_tanh = torch.tanh(mask)
+        # intensity_mask = torch.softmax(delta.mean(1,keepdim=True).view(b,1,h*w),-1).view(b,1,h,w)
+        # # intensity_mask = torch.tanh(mask.mean(1,keepdim=True))+1
+        # intensity_mask = intensity_mask / intensity_mask.max() # over all images instead of per image
+        # M = intensity_mask.max()
+        # m = intensity_mask.min()
+        # eps = 1e-8
+        # # multiplicative = (((intensity_mask+eps)/(intensity_mask+m+eps))-0.5)*(2*(M+m+eps)/(M-m+eps))
+        # multiplicative = (delta - delta_min + eps) / (delta_max-delta_min + eps) + 0.6
+        res = x * delta
+        res = torch.clamp(res, 0, 1.0)
         return res
 
     def add_residual(self, x, residual):

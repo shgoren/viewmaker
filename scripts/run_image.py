@@ -4,7 +4,7 @@ from viewmaker.src.utils.setup import process_config
 import random, torch, numpy
 
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.loggers import WandbLogger,TensorBoardLogger
 
 torch.backends.cudnn.benchmark = True
 
@@ -70,10 +70,10 @@ def run(args, gpu_device=None):
     callbacks.append(ckpt_callback)
 
     if not args.debug:
-        wandblogger = WandbLogger(project='viewmaker', name=config.exp_name)
+        wandblogger = WandbLogger(project='image-viewmaker',entity="shafir")
         wandblogger.log_hyperparams(config)
     else:
-        wandblogger = None
+        wandblogger = TensorBoardLogger(config.exp_dir)
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
         gpus=len(gpu_device),

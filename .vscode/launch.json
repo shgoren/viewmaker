@@ -17,7 +17,7 @@
             },
             "args": [
                 "/disk2/ofirb/viewmaker/config/image/pretrain_viewmaker_cifar10_simclr.json",
-                "--gpu-device" , "0",
+                "--gpu-device" , "7",
                 "--debug"
             ]
         },
