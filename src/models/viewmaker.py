@@ -17,6 +17,7 @@ ACTIVATIONS = {
     'leaky_relu': torch.nn.LeakyReLU,
 }
 
+
 class Viewmaker(torch.nn.Module):
     '''Viewmaker network that stochastically maps a multichannel 2D input to an output of the same size.'''
 
@@ -178,7 +179,7 @@ class Viewmaker(torch.nn.Module):
         result = torch.stack(result).transpose(0, 1).reshape(-1, *result[0].shape[1:])
         return result
 
-    def get_mask_delta(self, y_pixels):
+    def get_mask_delta(self, y_pixels, eps=1e-4):
         """
         Constrains the input perturbation by projecting it onto an L1 sphere
         :param y_pixels: (b,v,h,w)
@@ -187,16 +188,19 @@ class Viewmaker(torch.nn.Module):
         """
 
         distortion_budget = self.distortion_budget
-        delta = torch.sigmoid(y_pixels)  # Project to [0, 1]
+        delta = torch.sigmoid(y_pixels) * 2  # Project to [0, 2]
         if self.use_budget:
-            avg_magnitude = delta.mean([1, 2, 3], keepdim=True)
+            # avg_magnitude = delta.mean([1, 2, 3], keepdim=True)
+            avg_magnitude = (1-delta).abs().mean([1, 2, 3], keepdim=True)
             max_magnitude = distortion_budget
-            delta = 1-( max_magnitude + delta - avg_magnitude )
+            # delta = 1-( max_magnitude + delta - avg_magnitude )
+            delta = 1 - ((1-delta) * (max_magnitude / (avg_magnitude + eps)))
             # delta = 1-((1-delta)*max_magnitude/avg_magnitude)
         return delta
 # Im = 1-((1-image)*budget/average(1-image))
+
     def apply_learned_mask(self, x, mask):
-        delta = self.get_mask_delta(mask[:,:1])
+        delta = self.get_mask_delta(mask)
         # delta_min = delta.view(b,h*w).min(1,keepdim=True)[0].view(b,1,1,1)
         # delta_max = delta.view(b,h*w).max(1,keepdim=True)[0].view(b,1,1,1)
 
