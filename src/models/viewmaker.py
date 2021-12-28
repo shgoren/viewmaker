@@ -129,7 +129,7 @@ class Viewmaker(torch.nn.Module):
                 f = res(self.add_noise_channel(f, bound_multiplier=bound_multiplier))
 
         if self.budget_aware:
-            f = torch.cat([f, torch.full_like(f[:,0,:,:])])
+            f = torch.cat([f, torch.full_like(f[:,[0],:,:], self.distortion_budget)], dim=1)
 
         ## shahaf ##
         # modifiers are a generalizations of the residuals

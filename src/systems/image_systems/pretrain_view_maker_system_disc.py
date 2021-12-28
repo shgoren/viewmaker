@@ -126,7 +126,8 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             frequency_domain=self.config.model_params.spectral or False,
             downsample_to=self.config.model_params.viewmaker_downsample or False,
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
-            use_budget=self.config.model_params.use_budget
+            use_budget=self.config.model_params.use_budget,
+            budget_aware=self.config.model_params.budget_aware
         )
         return view_model
 

@@ -18,10 +18,10 @@
         "projection_head": false,
         "noise_dim": 100,
         "view_bound_magnitude": 0.05,
-        "num_res_blocks": 5,
+        "num_res_blocks": 3,
         "use_budget": true,
         "budget_sched": "random_normal",
-        "budget_mean": 0.5,
+        "budget_mean": 0.3,
         "budget_std": 0.2,
         "budget_aware": true,
         "viewmaker_backbone": "Viewmaker"

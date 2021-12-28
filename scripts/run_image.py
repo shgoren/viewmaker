@@ -71,7 +71,7 @@ def run(args):
         wandblogger = None
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
-        gpus=len(gpu_device),
+        gpus=len(args.gpu_device),
          # 'ddp' is usually faster, but we use 'dp' so the negative samples 
          # for the whole batch are used for the SimCLR loss
         # distributed_backend=config.distributed_backend or 'dp',
