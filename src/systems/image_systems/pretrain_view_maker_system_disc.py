@@ -7,6 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import wandb
+from dotmap import DotMap
+from pytorch_lightning.loggers import WandbLogger
+from torch import autograd
+from torchvision.utils import make_grid
 
 from viewmaker.src.datasets import datasets
 from viewmaker.src.gans.tiny_pix2pix import TinyP2PDiscriminator
@@ -30,6 +34,9 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         self.batch_size = config.optim_params.batch_size
         self.loss_name = self.config.loss_params.objective
         self.t = self.config.loss_params.t
+        self.adv_loss_weight = self.config.disc.vm_gen_loss_weight
+        self.r1_penalty_weight = self.config.disc.r1_penalty_weight
+        self.budget_mean, self.budget_std = self.config.model_params.budget_mean
 
         self.train_dataset, self.val_dataset = datasets.get_image_datasets(
             config.data_params.dataset,
@@ -39,9 +46,14 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         train_labels = self.train_dataset.dataset.targets
         self.train_ordered_labels = np.array(train_labels)
 
-        self.model = self.load_pretrained_encoder()
+        self.budget_sched = config.model_params.budget_sched or False
+
+        if config.model_params.pretrained or False:
+            self.model = self.load_pretrained_encoder()
+        else:
+            self.model = self.create_encoder()
         self.viewmaker = self.create_viewmaker()
-        if config.discriminator:
+        if config.discriminator or False:
             self.disc = self.create_discriminator()
         else:
             self.disc = None
@@ -51,6 +63,24 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             len(self.train_dataset),
             self.config.model_params.out_dim,
         )
+
+    def get_budget(self):
+        if self.budget_sched == 'random_normal':
+            return max(np.random.normal(self.budget_mean, self.budget_std), 0)
+
+        elif self.budget_sched == 'linear':
+            if not hasattr(self, "budget_steps"): # TODO: untested
+                self.budget_steps = np.linspace(0.05, 1, 180)
+            if not self.budget_sched:
+                return self.distortion_budget
+            idx = self.current_epoch
+            # before budget sched start
+            if idx < 30:
+                return self.budget_steps[0]
+            if idx < len(self.budget_steps):
+                return self.budget_steps[idx]
+            else:
+                return self.budget_steps[-1]
 
     def create_encoder(self):
         '''Create the encoder model.'''
@@ -83,26 +113,29 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         return simclr
 
     def create_discriminator(self):
-        return TinyP2PDiscriminator()
+        torch.manual_seed(3)
+        return TinyP2PDiscriminator(wgan=self.config.disc.wgan, blocks_num=self.config.disc.conv_blocks)
 
     def create_viewmaker(self):
-        view_model = viewmaker.Viewmaker(
+        VMClass = viewmaker.VIEWMAKERS[self.config.model_params.viewmaker_backbone]
+        view_model = VMClass(
             num_channels=self.train_dataset.NUM_CHANNELS,
             distortion_budget=self.config.model_params.view_bound_magnitude,
             activation=self.config.model_params.generator_activation or 'relu',
-            clamp=self.config.model_params.clamp_views,
+            clamp=self.config.model_params.clamp_views or True,
             frequency_domain=self.config.model_params.spectral or False,
             downsample_to=self.config.model_params.viewmaker_downsample or False,
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
+            use_budget=self.config.model_params.use_budget
         )
         return view_model
 
     def view(self, imgs):
         if 'Expert' in self.config.system:
             raise RuntimeError('Cannot call self.view() with Expert system')
-        views = self.viewmaker(imgs)
-        views = self.normalize(views)
-        return views
+        views_unn = self.viewmaker(imgs)
+        views = self.normalize(views_unn)
+        return views, views_unn
 
     def noise(self, batch_size, device):
         shape = (batch_size, self.config.model_params.noise_dim)
@@ -126,6 +159,7 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             raise ValueError(f'Dataset normalizer for {self.config.data_params.dataset} not implemented')
         imgs = (imgs - mean[None, :, None, None]) / std[None, :, None, None]
         return imgs
+        # return imgs * 2 - 1
 
     def forward(self, batch, train=True):
         indices, img, img2, neg_img, _, = batch
@@ -136,12 +170,13 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
                 'view1_embs': self.model(view1),
                 'orig_embs': self.get_repr(img)
             }
+
         elif self.loss_name == 'AdversarialSimCLRLoss':
             if self.config.model_params.double_viewmaker:
                 view1, view2 = self.view(img)
             else:
-                view1 = self.view(img)
-                view2 = self.view(img2)
+                view1, unnormalized_view1 = self.view(img)
+                view2, unnormalized_view2 = self.view(img2)
             emb_dict = {
                 'indices': indices,
                 'view1_embs': self.model(view1),
@@ -149,18 +184,31 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
                 'orig_embs': self.get_repr(img)
             }
             if self.disc is not None:
-                emb_dict["real_score"] = F.softmax(self.disc(img), dim=1)[:, 1] # add softmax
-                emb_dict["fake_score"] = F.softmax(torch.cat([self.disc(view1), self.disc(view2)], dim=0), dim=1)[:, 0]
+                img.requires_grad = True
+                emb_dict["real_score"] = self.disc(self.normalize(img))
+                emb_dict["fake_score"] = torch.cat([self.disc(view1), self.disc(view2)], dim=0)
+                emb_dict['disc_r1_penalty'] = 0
+                if self.disc.wgan:
+                    try:
+                        emb_dict["disc_r1_penalty"] = self.disc.r1_penalty(emb_dict["real_score"], img)
+                        # this fails if in validation mode
+                    except RuntimeError as e:
+                        pass
 
         else:
             raise ValueError(f'Unimplemented loss_name {self.loss_name}.')
 
         if self.global_step % 200 == 0:
             # Log some example views.
-            views_to_log = view1.permute(0, 2, 3, 1).detach().cpu().numpy()[:10]
-            wandb.log({"examples": [
-                wandb.Image(view, caption=f"Epoch: {self.current_epoch}, Step {self.global_step}, Train {train}") for
-                view in views_to_log]})
+            # row of images, row of diff, row of view
+            grid = make_grid(torch.cat([img[:10], unnormalized_view1[:10],
+                                        1 - (unnormalized_view1[:10] - img[:10])]), nrow=10)
+            grid = torch.clamp(torchvision.transforms.Resize(512)(grid), 0, 1)
+            if isinstance(self.logger, WandbLogger):
+                wandb.log({"original_vs_views": wandb.Image(grid,
+                                                            caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")})
+            # else:
+            #     self.logger.experiment.add_image('original_vs_views', grid, self.global_step)
 
         return emb_dict
 
@@ -194,12 +242,21 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         if self.disc is None:
             disc_loss = 0
             disc_acc = 0
+            gen_loss = 0
+            gen_acc = 0
+            disc_r1_penalty = 0
         else:
             real_s = emb_dict['real_score']
             fake_s = emb_dict['fake_score']
-            disc_loss = F.binary_cross_entropy(real_s, torch.ones_like(real_s)) + \
-                        F.binary_cross_entropy(fake_s, torch.zeros_like(fake_s))
-            disc_acc = torch.cat((real_s > 0.5, fake_s <= 0.5), dim=0).float().mean()
+            loss_n_acc = self.disc.calc_loss_and_acc(real_s, fake_s,
+                                                     r1_penalty=emb_dict['disc_r1_penalty'],
+                                                     r1_penalty_weight=self.r1_penalty_weight)
+
+            disc_loss = loss_n_acc["d_loss"]
+            disc_acc = loss_n_acc["d_acc"]
+            gen_loss = loss_n_acc["g_loss"]
+            gen_acc = loss_n_acc["g_acc"]
+            disc_r1_penalty = emb_dict['disc_r1_penalty']
 
         # Update memory bank.
         if train:
@@ -211,7 +268,10 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
                     new_data_memory = utils.l2_normalize(img_embs, dim=1)
                     self.memory_bank.update(emb_dict['indices'], new_data_memory)
 
-        return encoder_loss, encoder_acc, view_maker_loss, disc_loss, disc_acc
+        losses = {'encoder_loss': encoder_loss, 'encoder_acc': encoder_acc, 'view_maker_loss': view_maker_loss,
+                  'gen_loss': gen_loss, 'disc_loss': disc_loss, 'disc_acc': disc_acc, 'gan_acc': gen_acc,
+                  'disc_r1_penalty': disc_r1_penalty}
+        return losses
 
     def get_nearest_neighbor_label(self, img_embs, labels):
         '''
@@ -238,29 +298,77 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         return emb_dict
 
     def training_step_end(self, emb_dict):
-        encoder_loss, encoder_acc, view_maker_loss, disc_loss, disc_acc = self.get_losses_for_batch(emb_dict, train=True)
+        losses = self.get_losses_for_batch(emb_dict, train=True)
 
-        # Handle Tensor (dp) and int (ddp) cases
-        if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
-            optimizer_idx = emb_dict['optimizer_idx']
-        else:
-            optimizer_idx = emb_dict['optimizer_idx'][0]
+        if self.budget_sched:
+            self.viewmaker.distortion_budget = self.get_budget()
+
+        # assuming they fixed taht in new versions
+        # # Handle Tensor (dp) and int (ddp) cases
+        # if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
+        optimizer_idx = emb_dict['optimizer_idx']
+        # else:
+        #     optimizer_idx = emb_dict['optimizer_idx'][0]
+
         if optimizer_idx == 0:
             metrics = {
-                'encoder_loss': encoder_loss, 'temperature': self.t, "train_acc": encoder_acc
+                'encoder_loss': losses['encoder_loss'], "train_acc": losses['encoder_acc']
             }
-            return {'loss': encoder_loss, 'log': metrics}
+            loss = losses['encoder_loss']
+
         elif optimizer_idx == 1:
+
+            loss = self.get_vm_loss_weight() * losses['view_maker_loss'] + self.adv_loss_weight * losses['gen_loss']
             metrics = {
-                'view_maker_loss': view_maker_loss,
+                'view_maker_loss': losses['view_maker_loss'],
+                'generator_loss': losses['gen_loss'],
+                'view_maker_total_loss': loss
             }
-            return {'loss': view_maker_loss, 'log': metrics}
+
+        elif optimizer_idx == 2:
+            metrics = {
+                'disc_acc': losses['disc_acc'],
+                'disc_loss': losses['disc_loss'],
+                'disc_r1_penalty': losses['disc_r1_penalty']}
+            loss = losses['disc_loss'] + self.r1_penalty_weight * losses['disc_r1_penalty']
+
+        self.log_dict(metrics)
+        return loss
+
+    def get_vm_loss_weight(self):
+        if self.current_epoch < self.config.disc.gan_warmup:
+            return 0
         else:
-            metrics = {
-                'disc_acc': disc_acc,
-                'disc_loss': disc_loss,
-            }
-            return {'loss': disc_loss, 'log': metrics}
+            return 1
+
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu=False,
+                       using_native_amp=False, using_lbfgs=False):
+        # update viwmaker every step
+        if optimizer_idx == 0:
+            super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
+                                   using_native_amp, using_lbfgs)
+        freeze_after_epoch = isinstance(self.config.optim_params.viewmaker_freeze_epoch, int) and \
+                             self.current_epoch > self.config.optim_params.viewmaker_freeze_epoch
+
+        if optimizer_idx == 1:
+            if freeze_after_epoch:
+                # freeze viewmaker after a certain number of epochs
+                # call the closure by itself to run `training_step` + `backward` without an optimizer step
+                optimizer_closure()
+            else:
+                super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
+                                       using_native_amp, using_lbfgs)
+
+        if optimizer_idx == 2:
+            if freeze_after_epoch:
+                # freeze viewmaker after a certain number of epochs
+                # call the closure by itself to run `training_step` + `backward` without an optimizer step
+                optimizer_closure()
+            elif batch_idx % (self.config.disc.dis_skip_steps + 1) == 0:
+                super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
+                                       using_native_amp, using_lbfgs)
+            else:
+                optimizer_closure()
 
     def validation_step(self, batch, batch_idx):
         emb_dict = self.forward(batch, train=False)
@@ -270,18 +378,19 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             _, img, _, _, _ = batch
             img_embs = self.get_repr(img)  # Need encoding of image without augmentations (only normalization).
         labels = batch[-1]
-        encoder_loss, encoder_acc, view_maker_loss, disc_loss, disc_acc = self.get_losses_for_batch(emb_dict, train=False)
+        losses = self.get_losses_for_batch(emb_dict,
+                                           train=False)
 
         num_correct, batch_size = self.get_nearest_neighbor_label(img_embs, labels)
         output = OrderedDict({
-            'val_loss': encoder_loss + view_maker_loss + disc_loss,
-            'val_encoder_loss': encoder_loss,
-            'val_disc_loss': disc_loss,
-            'val_disc_acc': disc_loss,
-            'val_view_maker_loss': view_maker_loss,
-            'val_encoder_acc': encoder_acc,
+            'val_encoder_loss': losses['encoder_loss'],
+            'val_view_maker_loss': losses['view_maker_loss'],
+            'val_generator_loss': losses['gen_loss'],
+            'val_disc_loss': losses['disc_loss'],
+            'val_disc_acc': losses['disc_acc'],
+            'val_encoder_acc': losses['encoder_acc'],
             'val_zero_knn_correct': torch.tensor(num_correct, dtype=float, device=self.device),
-            'val_num_total': torch.tensor(batch_size, dtype=float, device=self.device),
+            'val_num_total': torch.tensor(batch_size, dtype=float, device=self.device)
         })
         return output
 
@@ -298,35 +407,9 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         val_acc = num_correct / float(num_total)
         metrics['val_zero_knn_acc'] = val_acc
         progress_bar = {'acc': val_acc}
-        return {'val_loss': metrics['val_loss'],
-                'log': metrics,
+        self.log_dict(metrics)
+        return {'val_enc_loss': metrics['val_encoder_loss'],
                 'progress_bar': progress_bar}
-
-    def optimizer_step(
-            self,
-            epoch,
-            batch_idx,
-            optimizer,
-            optimizer_idx,
-            optimizer_closure,
-            on_tpu=False,
-            using_native_amp=False,
-            using_lbfgs=False,
-    ):
-        # update viwmaker every step
-        if optimizer_idx == 0:
-            super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
-                                   using_native_amp, using_lbfgs)
-
-        if optimizer_idx == 1 or optimizer_idx == 2:
-            if self.config.optim_params.viewmaker_freeze_epoch and \
-                    self.current_epoch > self.config.optim_params.viewmaker_freeze_epoch:
-                # freeze viewmaker after a certain number of epochs
-                # call the closure by itself to run `training_step` + `backward` without an optimizer step
-                optimizer_closure()
-            else:
-                super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
-                                       using_native_amp, using_lbfgs)
 
     def configure_optimizers(self):
         # Optimize temperature with encoder.
@@ -359,17 +442,13 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         enc_list = [encoder_optim, view_optim]
 
         if self.disc is not None:
-            disc_optim = torch.optim.SGD(
-                self.disc.parameters(),
-                lr=self.config.optim_params.learning_rate,
-                momentum=self.config.optim_params.momentum,
-                weight_decay=self.config.optim_params.weight_decay,
-            )
+            disc_optim = torch.optim.Adam(self.disc.parameters(),
+                                          lr=self.config.optim_params.disc_learning_rate)
             enc_list.append(disc_optim)
         return enc_list, []
 
     def train_dataloader(self):
-        return create_dataloader(self.train_dataset, self.config, self.batch_size)
+        return create_dataloader(self.train_dataset, self.config, self.batch_size, shuffle=False)
 
     def val_dataloader(self):
         return create_dataloader(self.val_dataset, self.config, self.batch_size,

@@ -39,10 +39,11 @@ class PretrainViewMakerSystem(pl.LightningModule):
         train_labels = self.train_dataset.dataset.targets
         self.train_ordered_labels = np.array(train_labels)
 
-        self.budget_sched = config.model_params.budget_sched
-        self.budget_steps = np.linspace(0.0001, 1, 400)
+        self.budget_sched = config.model_params.budget_sched or False
+        self.budget_steps = np.linspace(0.05, 1, 180)
 
-        if config.model_params.pretrained:
+        if config.model_params.pretrained or False:
+            print("loading pretrained encoder")
             self.model = self.load_pretrained_encoder()
         else:
             self.model = self.create_encoder()
@@ -58,7 +59,11 @@ class PretrainViewMakerSystem(pl.LightningModule):
     def get_budget(self):
         if not self.budget_sched:
             return self.distortion_budget
-        idx = self.global_step // 1000
+
+        idx = self.current_epoch
+        # before budget sched start
+        if idx < 20:
+            return self.budget_steps[0]
         if idx < len(self.budget_steps):
             return self.budget_steps[idx]
         else:
@@ -103,9 +108,6 @@ class PretrainViewMakerSystem(pl.LightningModule):
             use_budget=True
         )
         return view_model
-
-    def create_dcgan_generator(self):
-        pass
 
     def view(self, imgs):
         if 'Expert' in self.config.system:
@@ -262,25 +264,17 @@ class PretrainViewMakerSystem(pl.LightningModule):
         self.log_dict(metrics)
         return loss
 
-    def optimizer_step(
-            self,
-            epoch,
-            batch_idx,
-            optimizer,
-            optimizer_idx,
-            optimizer_closure,
-            on_tpu=False,
-            using_native_amp=False,
-            using_lbfgs=False,
-    ):
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu=False,
+                       using_native_amp=False, using_lbfgs=False):
         # update viwmaker every step
         if optimizer_idx == 0:
             super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
                                    using_native_amp, using_lbfgs)
+        freeze_after_epoch = self.config.optim_params.viewmaker_freeze_epoch and \
+                    self.current_epoch > self.config.optim_params.viewmaker_freeze_epoch
 
         if optimizer_idx == 1:
-            if self.config.optim_params.viewmaker_freeze_epoch and \
-                    self.current_epoch > self.config.optim_params.viewmaker_freeze_epoch:
+            if freeze_after_epoch:
                 # freeze viewmaker after a certain number of epochs
                 # call the closure by itself to run `training_step` + `backward` without an optimizer step
                 optimizer_closure()

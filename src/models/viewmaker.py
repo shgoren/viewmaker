@@ -10,12 +10,13 @@ import torch.nn as nn
 from torch.nn import functional as init
 import torch_dct as dct
 
-from viewmaker.src.gans.tiny_pix2pix import TinyP2PGenerator
+from viewmaker.src.gans.tiny_pix2pix import TinyP2PGenerator, TinyP2PEncoder, TinyP2PDecoder
 
 ACTIVATIONS = {
     'relu': torch.nn.ReLU,
     'leaky_relu': torch.nn.LeakyReLU,
 }
+
 
 class Viewmaker(torch.nn.Module):
     '''Viewmaker network that stochastically maps a multichannel 2D input to an output of the same size.'''
@@ -69,6 +70,9 @@ class Viewmaker(torch.nn.Module):
         self.res3 = ResidualBlock(128 + 3)
         self.res4 = ResidualBlock(128 + 4)
         self.res5 = ResidualBlock(128 + 5)
+        self.res6 = ResidualBlock(128 + 6)
+        self.res7 = ResidualBlock(128 + 7)
+        self.res8 = ResidualBlock(128 + 8)
 
         # Upsampling Layers
         ## shahaf change ##
@@ -119,7 +123,7 @@ class Viewmaker(torch.nn.Module):
         # [batch_size, 128]
         features = f.clone().mean([-1, -2])
 
-        for i, res in enumerate([self.res1, self.res2, self.res3, self.res4, self.res5]):
+        for i, res in enumerate([self.res1, self.res2, self.res3, self.res4, self.res5, self.res6, self.res7, self.res8]):
             if i < num_res_blocks:
                 f = res(self.add_noise_channel(f, bound_multiplier=bound_multiplier))
 
@@ -178,7 +182,7 @@ class Viewmaker(torch.nn.Module):
         return result
 
     def apply_learned_mask(self, x, mask):
-        delta = self.get_delta(mask) # I think this is in [-1,1] but this needs checking
+        delta = self.get_delta(mask)  # I think this is in [-1,1] but this needs checking
         mask = delta + 1  # in [0,2]
         res = x * mask
         res = torch.clamp(res, 0, 1)
@@ -200,7 +204,7 @@ class Viewmaker(torch.nn.Module):
         return result
 
 
-class ViewmakerPix2Pix(torch.nn.Module):
+class ViewmakerPix2Pix(Viewmaker):
     '''Viewmaker network that stochastically maps a multichannel 2D input to an output of the same size.'''
 
     def __init__(self, num_channels=3, distortion_budget=0.05, activation='relu',
@@ -230,61 +234,23 @@ class ViewmakerPix2Pix(torch.nn.Module):
         self.distortion_budget = distortion_budget
         self.num_views = num_views
 
-        self.model = TinyP2PGenerator(True)
-
-    def _full_size_output_net(self):
-        return nn.Sequential(
-            UpsampleConvLayer(128 + self.num_res_blocks, 64, kernel_size=3, stride=1, upsample=2),
-            torch.nn.InstanceNorm2d(64, affine=True),
-            self.act(),
-            ResidualBlock(64),
-            UpsampleConvLayer(64, 32, kernel_size=3, stride=1, upsample=2),
-            torch.nn.InstanceNorm2d(32, affine=True),
-            self.act(),
-            ResidualBlock(32),
-            ConvLayer(32, self.num_channels, kernel_size=9,
-                      stride=1)
-        )
-
-    @staticmethod
-    def zero_init(m):
-        if isinstance(m, (nn.Linear, nn.Conv2d)):
-            # actual 0 has symmetry problems
-            init.normal_(m.weight.data, mean=0, std=1e-4)
-            # init.constant_(m.weight.data, 0)
-            init.constant_(m.bias.data, 0)
-        elif isinstance(m, nn.BatchNorm1d):
-            pass
-
-    def add_noise_channel(self, x, num=1, bound_multiplier=1):
-        # bound_multiplier is a scalar or a 1D tensor of length batch_size
-        batch_size = x.size(0)
-        filter_size = x.size(-1)
-        shp = (batch_size, num, filter_size, filter_size)
-        bound_multiplier = torch.tensor(bound_multiplier, device=x.device)
-        noise = torch.rand(shp, device=x.device) * bound_multiplier.view(-1, 1, 1, 1)
-        return torch.cat((x, noise), dim=1)
+        torch.manual_seed(2)
+        self.encoder = TinyP2PEncoder(num_channels+1)
+        self.upsampling = nn.ModuleList(
+            [TinyP2PDecoder(num_channels) for _ in range(self.num_views)])  # TODO: check adding instance norm
 
     def basic_net(self, y, num_res_blocks=5, bound_multiplier=1):
         if num_res_blocks not in list(range(6)):
             raise ValueError(f'num_res_blocks must be in {list(range(6))}, got {num_res_blocks}.')
 
         y = self.add_noise_channel(y, bound_multiplier=bound_multiplier)
-        f = self.feature_extraction(y)
-
-        # Features that could be useful for other auxilary layers / losses.
-        # [batch_size, 128]
-        features = f.clone().mean([-1, -2])
-
-        for i, res in enumerate([self.res1, self.res2, self.res3, self.res4, self.res5]):
-            if i < num_res_blocks:
-                f = res(self.add_noise_channel(f, bound_multiplier=bound_multiplier))
+        f = self.encoder(y)
 
         modifiers = torch.stack([up(f) for up in self.upsampling], dim=1)
 
-        return modifiers, features
+        return modifiers, f
 
-    def get_delta(self, y_pixels, eps=1e-4):
+    def get_delta(self, delta, eps=1e-4):
         """
         Constrains the input perturbation by projecting it onto an L1 sphere
         :param y_pixels: (b,v,h,w)
@@ -293,67 +259,11 @@ class ViewmakerPix2Pix(torch.nn.Module):
         """
 
         distortion_budget = self.distortion_budget
-        delta = torch.tanh(y_pixels)  # Project to [-1, 1]
         if self.use_budget:
             avg_magnitude = delta.abs().mean([1, 2, 3], keepdim=True)
             max_magnitude = distortion_budget
             delta = delta * max_magnitude / (avg_magnitude + eps)
         return delta
-
-    def forward(self, x):
-        x_orig = x
-        if self.downsample_to:
-            # Downsample.
-            x = torch.nn.functional.interpolate(
-                x, size=(self.downsample_to, self.downsample_to), mode='bilinear')
-        y = x
-
-        if self.frequency_domain:
-            # Input to viewmaker is in frequency domain, outputs frequency domain perturbation.
-            # Uses the Discrete Cosine Transform.
-            # shape still [batch_size, C, W, H]
-            y = dct.dct_2d(y)
-
-        modifiers, features = self.basic_net(y, self.num_res_blocks, bound_multiplier=1)
-        result = []
-        masks, modifiers = modifiers[:, :self.masks], modifiers[:, self.masks:]
-        residuals = modifiers
-
-        for i in range(residuals.size(1)):
-            view = residuals[:, i]
-            result.append(self.add_residual(x_orig, view))
-        for i in range(masks.size(1)):
-            view = masks[:, i]
-            result.append(self.apply_learned_mask(x_orig, view))
-
-        result = torch.stack(result).transpose(0, 1).reshape(-1, *result[0].shape[1:])
-        return result
-
-    def apply_learned_mask(self, x, mask):
-        # avg_magnitude = delta.abs().mean([1, 2, 3], keepdim=True)
-        # max_magnitude = self.distortion_budget
-        # delta = delta * max_magnitude / (avg_magnitude + eps)
-        mask = torch.tanh(mask) + 1  # in [0,2]
-        res = x * mask
-        res = torch.clamp(res, 0, 1)
-        return res
-
-    def add_residual(self, x, residual):
-        delta = self.get_delta(residual)
-        if self.frequency_domain:
-            # Compute inverse DCT from frequency domain to time domain.
-            delta = dct.idct_2d(delta)
-        if self.downsample_to:
-            # Upsample.
-            delta = torch.nn.functional.interpolate(delta, size=x.shape[-2:], mode='bilinear')
-
-        # Additive perturbation
-        result = x + delta
-        if self.clamp:
-            result = torch.clamp(result, 0, 1.0)
-        return result
-
-
 # ---
 
 class ConvLayer(torch.nn.Module):
@@ -415,3 +325,9 @@ class UpsampleConvLayer(torch.nn.Module):
         out = self.reflection_pad(x_in)
         out = self.conv2d(out)
         return out
+
+
+VIEWMAKERS = {
+    'ViewmakerPix2Pix': ViewmakerPix2Pix,
+    'Viewmaker': Viewmaker
+}

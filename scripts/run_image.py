@@ -10,10 +10,12 @@ torch.backends.cudnn.benchmark = True
 
 SYSTEM = {
     'PretrainViewMakerSystem': image_systems.PretrainViewMakerSystem,
+    'PretrainViewMakerSystemDisc': image_systems.PretrainViewMakerSystemDisc,
     'PretrainNeuTraLADViewMakerSystem': image_systems.PretrainNeuTraLADViewMakerSystem,
     'PretrainExpertSystem': image_systems.PretrainExpertSystem,
     'TransferViewMakerSystem': image_systems.TransferViewMakerSystem,
     'TransferExpertSystem': image_systems.TransferExpertSystem,
+    'PretrainExpertGANSystem': image_systems.PretrainExpertGANSystem
 }
 
 

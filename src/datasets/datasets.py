@@ -15,6 +15,7 @@ from  viewmaker.src.datasets.meta_datasets.mscoco import MSCOCO as MSCOCO2
 from  viewmaker.src.datasets.meta_datasets.traffic_sign import TrafficSign
 from  viewmaker.src.datasets.meta_datasets.vgg_flower import VGGFlower
 from  viewmaker.src.datasets.data_statistics import get_data_mean_and_stdev
+from viewmaker.src.gans.tiny_pix2pix import TinyP2PGenerator
 
 DATASET = {
     'cifar10': CIFAR10,
@@ -73,6 +74,13 @@ def load_image_transforms(dataset):
     else:
         return None, None
 
+    return train_transforms, test_transforms
+
+
+def load_gan_transform(dataset):
+    # load a pretrained p2p gan
+    train_transforms = transforms.ToTensor()
+    test_transforms = transforms.ToTensor()
     return train_transforms, test_transforms
 
 
@@ -174,4 +182,5 @@ TRANSFORMS = {
     'all': load_default_transforms,
     'all_unnorm': load_default_unnorm_transforms,
     'none': load_image_transforms,
+    'gan_augmnetation': load_gan_transform
 }
