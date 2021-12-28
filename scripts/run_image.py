@@ -19,7 +19,7 @@ SYSTEM = {
 }
 
 
-def run(args, gpu_device=None):
+def run(args):
     '''Run the Lightning system. 
 
     Args:
@@ -35,17 +35,10 @@ def run(args, gpu_device=None):
             See the following for more options: 
             https://pytorch-lightning.readthedocs.io/en/latest/multi_gpu.html
     '''
-    if gpu_device == 'cpu' or not gpu_device:
+    if args.gpu_device == 'cpu' or not args.gpu_device:
         gpu_device = None
-    config = process_config(args.config)
-    config.debug = args.debug
-    if args.exp_name is not None:
-        config.exp_name = args.exp_name
-    if args.t is not None:
-        config.loss_params.t = args.t
-    # Only override if specified.
-    if gpu_device: config.gpu_device = gpu_device
-    if args.num_workers is not None: config.data_loader_workers = args.num_workers
+    config = process_config(args.config, args)
+
     seed_everything(config.seed)
     SystemClass = SYSTEM[config.system]
     system = SystemClass(config)
@@ -121,4 +114,4 @@ if __name__ == "__main__":
     # Ensure it's a string, even if from an older config
     gpu_device = str(args.gpu_device) if args.gpu_device else None
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_device)
-    run(args, gpu_device=gpu_device)
+    run(args)

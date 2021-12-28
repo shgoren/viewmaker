@@ -36,7 +36,7 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         self.t = self.config.loss_params.t
         self.adv_loss_weight = self.config.disc.vm_gen_loss_weight
         self.r1_penalty_weight = self.config.disc.r1_penalty_weight
-        self.budget_mean, self.budget_std = self.config.model_params.budget_mean
+        self.budget_mean, self.budget_std = self.config.model_params.budget_mean, self.config.model_params.budget_std
 
         self.train_dataset, self.val_dataset = datasets.get_image_datasets(
             config.data_params.dataset,

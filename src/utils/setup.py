@@ -21,13 +21,13 @@ def makedirs(dir_list):
             os.makedirs(dir)
 
 
-def process_config(config_path, override_dotmap=None, exp_name_suffix=None):
+def process_config(config_path, args, override_dotmap=None, exp_name_suffix=None):
     config_json = load_json(config_path)
-    return _process_config(config_json, override_dotmap=override_dotmap,
+    return _process_config(config_json, args, override_dotmap=override_dotmap,
                            exp_name_suffix=exp_name_suffix)
 
 
-def _process_config(config_json, override_dotmap=None, exp_name_suffix=None):
+def _process_config(config_json, args, override_dotmap=None, exp_name_suffix=None):
     """
     Processes config file:
         1) Converts it to a DotMap
@@ -35,11 +35,19 @@ def _process_config(config_json, override_dotmap=None, exp_name_suffix=None):
         3) Set up logging
     """
     config = DotMap(config_json)
+
     if override_dotmap is not None:
         config.update(override_dotmap)
 
     if exp_name_suffix is not None:
         config.exp_name = f'{config.exp_name}_{exp_name_suffix}'
+
+    config.debug = args.debug
+    if args.t is not None:
+        config.loss_params.t = args.t
+    # Only override if specified.
+    if args.gpu_device: config.gpu_device = args.gpu_device
+    if args.num_workers is not None: config.data_loader_workers = args.num_workers
 
     print("Loaded configuration: ")
     pprint(config)
