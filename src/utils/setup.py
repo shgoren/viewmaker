@@ -43,6 +43,8 @@ def _process_config(config_json, args, override_dotmap=None, exp_name_suffix=Non
         config.exp_name = f'{config.exp_name}_{exp_name_suffix}'
 
     config.debug = args.debug
+    if args.exp_name is not None:
+        config.exp_name = args.exp_name
     if args.t is not None:
         config.loss_params.t = args.t
     # Only override if specified.

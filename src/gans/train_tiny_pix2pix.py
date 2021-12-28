@@ -43,7 +43,6 @@ def train_tiny_pix2pix(args):
         print(f"starting epoch {epoch}/{args.num_epochs}")
         for i, (idx, img1, _, img2, _) in enumerate(tqdm(loader)):
             step_logs = {}
-            # TODO: check if normalized
             # img1_n = (img1 * 2 - 1).cuda()
             # img2_n = (img2 * 2 - 1).cuda()
             img1_n = img1.cuda()

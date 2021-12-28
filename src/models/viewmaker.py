@@ -23,7 +23,7 @@ class Viewmaker(torch.nn.Module):
 
     def __init__(self, num_channels=3, distortion_budget=0.05, activation='relu',
                  clamp=True, frequency_domain=False, downsample_to=False, num_res_blocks=5,
-                 num_views=1, masks=0, use_budget=True):
+                 num_views=1, masks=0, use_budget=True, budget_aware=False):
         '''Initialize the Viewmaker network.
 
         Args:
@@ -52,6 +52,7 @@ class Viewmaker(torch.nn.Module):
         self.act = ACTIVATIONS[activation]
         self.num_views = num_views
         self.masks = masks
+        self.budget_aware = budget_aware
 
         self.feature_extraction = nn.Sequential(
             ConvLayer(self.num_channels + 1, 32, kernel_size=9, stride=1),
@@ -81,7 +82,7 @@ class Viewmaker(torch.nn.Module):
 
     def _full_size_output_net(self):
         return nn.Sequential(
-            UpsampleConvLayer(128 + self.num_res_blocks, 64, kernel_size=3, stride=1, upsample=2),
+            UpsampleConvLayer(128 + self.num_res_blocks + int(self.budget_aware), 64, kernel_size=3, stride=1, upsample=2),
             torch.nn.InstanceNorm2d(64, affine=True),
             self.act(),
             ResidualBlock(64),
@@ -126,6 +127,9 @@ class Viewmaker(torch.nn.Module):
         for i, res in enumerate([self.res1, self.res2, self.res3, self.res4, self.res5, self.res6, self.res7, self.res8]):
             if i < num_res_blocks:
                 f = res(self.add_noise_channel(f, bound_multiplier=bound_multiplier))
+
+        if self.budget_aware:
+            f = torch.cat([f, torch.full_like(f[:,0,:,:])])
 
         ## shahaf ##
         # modifiers are a generalizations of the residuals

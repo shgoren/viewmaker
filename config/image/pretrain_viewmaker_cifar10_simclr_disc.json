@@ -23,6 +23,7 @@
         "budget_sched": "random_normal",
         "budget_mean": 0.5,
         "budget_std": 0.2,
+        "budget_aware": true,
         "viewmaker_backbone": "Viewmaker"
     },
     "disc": {

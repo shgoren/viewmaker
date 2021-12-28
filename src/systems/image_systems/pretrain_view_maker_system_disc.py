@@ -207,6 +207,13 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             if isinstance(self.logger, WandbLogger):
                 wandb.log({"original_vs_views": wandb.Image(grid,
                                                             caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")})
+
+            view1_view2_grid = make_grid(torch.cat([1 - (unnormalized_view1[:10] - img[:10]),
+                                        1 - (unnormalized_view2[:10] - img[:10])]), nrow=10)
+            view1_view2_grid = torch.clamp(torchvision.transforms.Resize(512)(view1_view2_grid), 0, 1)
+            if isinstance(self.logger, WandbLogger):
+                wandb.log({"view1_vs_view2": wandb.Image(view1_view2_grid,
+                                                            caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")})
             # else:
             #     self.logger.experiment.add_image('original_vs_views', grid, self.global_step)
 
