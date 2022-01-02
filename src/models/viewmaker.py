@@ -7,10 +7,11 @@ https://github.com/pytorch/examples/blob/0c1654d6913f77f09c0505fb284d977d89c17c1
 '''
 import torch
 import torch.nn as nn
-from torch.nn import functional as init
+from torch.nn import functional as F
 import torch_dct as dct
 
 from viewmaker.src.gans.tiny_pix2pix import TinyP2PGenerator, TinyP2PEncoder, TinyP2PDecoder
+from viewmaker.src.models.tps import TPSDecoder
 
 ACTIVATIONS = {
     'relu': torch.nn.ReLU,
@@ -23,7 +24,7 @@ class Viewmaker(torch.nn.Module):
 
     def __init__(self, num_channels=3, distortion_budget=0.05, activation='relu',
                  clamp=True, frequency_domain=False, downsample_to=False, num_res_blocks=5,
-                 num_views=1, masks=0, use_budget=True, budget_aware=False):
+                 additive=1, multiplicative=0, tps=0, use_budget=True, budget_aware=False, image_dim=None):
         '''Initialize the Viewmaker network.
 
         Args:
@@ -50,8 +51,9 @@ class Viewmaker(torch.nn.Module):
         self.downsample_to = downsample_to
         self.distortion_budget = distortion_budget
         self.act = ACTIVATIONS[activation]
-        self.num_views = num_views
-        self.masks = masks
+        self.multiplicative = multiplicative
+        self.additive = additive
+        self.tps = tps
         self.budget_aware = budget_aware
 
         self.feature_extraction = nn.Sequential(
@@ -75,10 +77,33 @@ class Viewmaker(torch.nn.Module):
         self.res7 = ResidualBlock(128 + 7)
         self.res8 = ResidualBlock(128 + 8)
 
+        last_feature_dim = (128 + self.num_res_blocks, image_dim[0] // 4, image_dim[0] // 4)
         # Upsampling Layers
         ## shahaf change ##
         # viewmaker has multiple decoders to add variability
-        self.upsampling = nn.ModuleList([self._full_size_output_net() for _ in range(self.num_views)])
+        assert additive + multiplicative + tps > 0, "no augmentation specified"
+        if additive + multiplicative >0:
+            self.pixel_transforms = nn.ModuleList([self._full_size_output_net() for _ in range(self.additive + self.multiplicative)])
+        else:
+            self.pixel_transforms = None
+
+        if tps > 0:
+            assert image_dim is not None, "image dimensions are required for tps augmentations"
+
+            self.geometric_transforms = nn.ModuleList([TPSDecoder(last_feature_dim, image_dim, grid_hw=(2,2)) for _ in range(self.tps)])
+        else:
+            self.geometric_transforms = None
+
+        self.dynamic_budget = True
+        self.budget_net = nn.Sequential(
+            ConvLayer(last_feature_dim[0], 32, kernel_size=3, stride=1),
+            torch.nn.BatchNorm2d(32),
+            self.act(),
+            ConvLayer(32, 16, kernel_size=3, stride=1),
+            torch.nn.BatchNorm2d(16),
+            self.act(),
+            ConvLayer(16, 1, kernel_size=3, stride=1),
+        )
 
     def _full_size_output_net(self):
         return nn.Sequential(
@@ -98,9 +123,9 @@ class Viewmaker(torch.nn.Module):
     def zero_init(m):
         if isinstance(m, (nn.Linear, nn.Conv2d)):
             # actual 0 has symmetry problems
-            init.normal_(m.weight.data, mean=0, std=1e-4)
+            F.normal_(m.weight.data, mean=0, std=1e-4)
             # init.constant_(m.weight.data, 0)
-            init.constant_(m.bias.data, 0)
+            F.constant_(m.bias.data, 0)
         elif isinstance(m, nn.BatchNorm1d):
             pass
 
@@ -113,13 +138,12 @@ class Viewmaker(torch.nn.Module):
         noise = torch.rand(shp, device=x.device) * bound_multiplier.view(-1, 1, 1, 1)
         return torch.cat((x, noise), dim=1)
 
-    def basic_net(self, y, num_res_blocks=5, bound_multiplier=1):
-        if num_res_blocks not in list(range(6)):
-            raise ValueError(f'num_res_blocks must be in {list(range(6))}, got {num_res_blocks}.')
+    def basic_net(self, x, num_res_blocks=5, bound_multiplier=1):
+        if num_res_blocks not in list(range(9)):
+            raise ValueError(f'num_res_blocks must be in {list(range(9))}, got {num_res_blocks}.')
 
-        y = self.add_noise_channel(y, bound_multiplier=bound_multiplier)
-        f = self.feature_extraction(y)
-
+        x_noise = self.add_noise_channel(x, bound_multiplier=bound_multiplier)
+        f = self.feature_extraction(x_noise)
         # Features that could be useful for other auxilary layers / losses.
         # [batch_size, 128]
         features = f.clone().mean([-1, -2])
@@ -128,16 +152,25 @@ class Viewmaker(torch.nn.Module):
             if i < num_res_blocks:
                 f = res(self.add_noise_channel(f, bound_multiplier=bound_multiplier))
 
-        if self.budget_aware:
-            f = torch.cat([f, torch.full_like(f[:,[0],:,:], self.distortion_budget)], dim=1)
+        if self.dynamic_budget:
+            self.distortion_budget = F.sigmoid(self.budget_net(f).mean())
 
         ## shahaf ##
         # modifiers are a generalizations of the residuals
-        modifiers = torch.stack([up(f) for up in self.upsampling], dim=1)
+        if self.pixel_transforms:
+            if self.budget_aware:
+                f = torch.cat([f, torch.full_like(f[:,[0],:,:], self.distortion_budget)], dim=1)
+            modifiers = torch.stack([up(f) for up in self.pixel_transforms], dim=1)
+        else:
+            modifiers = None
+        if self.geometric_transforms:
+            geometric_views = torch.stack([up(f, x, self.distortion_budget) for up in self.geometric_transforms], dim=1)
+        else:
+            geometric_views = None
 
-        return modifiers, features
+        return modifiers, geometric_views, features
 
-    def get_delta(self, y_pixels, eps=1e-4):
+    def get_delta(self, y_pixels, eps=1e-6):
         """
         Constrains the input perturbation by projecting it onto an L1 sphere
         :param y_pixels: (b,v,h,w)
@@ -167,20 +200,22 @@ class Viewmaker(torch.nn.Module):
             # shape still [batch_size, C, W, H]
             y = dct.dct_2d(y)
 
-        modifiers, features = self.basic_net(y, self.num_res_blocks, bound_multiplier=1)
+        modifiers, geometric_views, features = self.basic_net(y, self.num_res_blocks, bound_multiplier=1)
         result = []
         # shahaf #
         # masks are multiplicative and residual are additive
-        masks, modifiers = modifiers[:, :self.masks], modifiers[:, self.masks:]
-        residuals = modifiers
+        if modifiers is not None:
+            masks, residuals = modifiers[:, :self.multiplicative], modifiers[:, self.multiplicative:]
 
-        for i in range(residuals.size(1)):
-            view = residuals[:, i]
-            result.append(self.add_residual(x_orig, view))
+            for i in range(residuals.size(1)):
+                view = residuals[:, i]
+                result.append(self.add_residual(x_orig, view))
 
-        for i in range(masks.size(1)):
-            view = masks[:, i]
-            result.append(self.apply_learned_mask(x_orig, view))
+            for i in range(masks.size(1)):
+                view = masks[:, i]
+                result.append(self.apply_learned_mask(x_orig, view))
+        if geometric_views is not None:
+            result.extend(geometric_views.unbind(1))
 
         result = torch.stack(result).transpose(0, 1).reshape(-1, *result[0].shape[1:])
         return result
@@ -206,6 +241,7 @@ class Viewmaker(torch.nn.Module):
         if self.clamp:
             result = torch.clamp(result, 0, 1.0)
         return result
+
 
 
 class ViewmakerPix2Pix(Viewmaker):
@@ -282,7 +318,6 @@ class ConvLayer(torch.nn.Module):
         out = self.reflection_pad(x)
         out = self.conv2d(out)
         return out
-
 
 class ResidualBlock(torch.nn.Module):
     """ResidualBlock

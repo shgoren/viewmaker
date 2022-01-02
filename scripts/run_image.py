@@ -65,7 +65,7 @@ def run(args):
     callbacks.append(ckpt_callback)
 
     if not args.debug:
-        wandblogger = WandbLogger(project='viewmaker', name=config.exp_name)
+        wandblogger = WandbLogger(project=config.project, name=config.exp_name)
         wandblogger.log_hyperparams(config)
     else:
         wandblogger = None

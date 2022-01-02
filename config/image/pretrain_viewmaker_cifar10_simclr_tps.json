@@ -1,6 +1,7 @@
 {
     "exp_base": null,
-    "exp_name": "viewmaker",
+    "exp_name": "viewmaker-tps",
+    "project": "viewmaker-tps",
     "system": "PretrainViewMakerSystem",
     "cuda": true,
     "gpu_device": 0,
@@ -17,11 +18,11 @@
         "resnet_small": true,
         "projection_head": false,
         "noise_dim": 100,
-        "view_bound_magnitude": 0.05,
+        "view_bound_magnitude": 0.3,
         "num_res_blocks": 3,
-        "additive": 1,
+        "additive": 0,
         "multiplicative": 0,
-        "tps": 0
+        "tps": 1
     },
     "loss_params": {
         "objective": "AdversarialSimCLRLoss",

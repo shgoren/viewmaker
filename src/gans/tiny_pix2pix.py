@@ -181,21 +181,24 @@ class TinyP2PDiscriminator(nn.Module):
         self.conv_block1 = DescConvBlock(in_channels, 64, batch_norm=False, stride=(2, 2))
         self.conv_block2 = DescConvBlock(64, 128, batch_norm=True, stride=(1, 1))
         self.conv_block3 = DescConvBlock(128, 256, batch_norm=True, stride=(1, 1))
+        if blocks_num>4:
+            self.conv_block3_5 = DescConvBlock(256, 256, batch_norm=True, stride=(1, 1))
         self.conv_block4 = DescConvBlock(256, 512, batch_norm=True, stride=(1, 1))
+        if blocks_num>5:
+            self.conv_block4_5 = DescConvBlock(512, 512, batch_norm=True, stride=(1, 1))
+
+        self.conv_blocks = [*self._modules.values()]
 
         # dummy discriminator to see that the vm is winning
         if self.blocks == 0:
             feature_dim = 3
         else:
-            feature_dim = 2 ** (5 + self.blocks)
+            feature_dim = self.conv_blocks[-1].out_channels
         self.final_conv = nn.Conv2d(feature_dim, 1, kernel_size=(3, 3), stride=(1, 1), padding=1)
         conv_glorot_init_keras(self.final_conv)
 
     def forward(self, x):
-        for i, conv_block in enumerate([self.conv_block1,
-                                        self.conv_block2,
-                                        self.conv_block3,
-                                        self.conv_block4]):
+        for i, conv_block in enumerate(self.conv_blocks):
             if i == self.blocks:
                 break
             x = conv_block(x)

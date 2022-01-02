@@ -7,7 +7,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import wandb
+from pytorch_lightning.loggers import WandbLogger
 from torch import autograd
+from torchvision.utils import make_grid
 from torchvision import models
 
 from viewmaker.src.datasets import datasets
@@ -105,16 +107,20 @@ class PretrainViewMakerSystem(pl.LightningModule):
             frequency_domain=self.config.model_params.spectral or False,
             downsample_to=self.config.model_params.viewmaker_downsample or False,
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
-            use_budget=True
+            use_budget=True,
+            image_dim = (32,32),
+            multiplicative=self.config.model_params.multiplicative,
+            additive=self.config.model_params.additive,
+            tps=self.config.model_params.tps
         )
         return view_model
 
     def view(self, imgs):
         if 'Expert' in self.config.system:
             raise RuntimeError('Cannot call self.view() with Expert system')
-        views = self.viewmaker(imgs)
-        views = self.normalize(views)
-        return views
+        views_unn = self.viewmaker(imgs)
+        views = self.normalize(views_unn)
+        return views, views_unn
 
     def noise(self, batch_size, device):
         shape = (batch_size, self.config.model_params.noise_dim)
@@ -153,8 +159,8 @@ class PretrainViewMakerSystem(pl.LightningModule):
             if self.config.model_params.double_viewmaker:
                 view1, view2 = self.view(img)
             else:
-                view1 = self.view(img)
-                view2 = self.view(img2)
+                view1, unnormalized_view1 = self.view(img)
+                view2, unnormalized_view2 = self.view(img2)
             emb_dict = {
                 'indices': indices,
                 'view1_embs': self.model(view1),
@@ -166,11 +172,21 @@ class PretrainViewMakerSystem(pl.LightningModule):
 
         if self.global_step % 200 == 0:
             # Log some example views.
-            views_to_log = view1.permute(0, 2, 3, 1).detach().cpu().numpy()[:10]
-            if not self.config.debug:
-                wandb.log({"examples": [
-                    wandb.Image(view, caption=f"Epoch: {self.current_epoch}, Step {self.global_step}, Train {train}") for
-                    view in views_to_log]})
+            # row of images, row of diff, row of view
+            view1_diff = 1 - (unnormalized_view1[:10] - img[:10])
+            view2_diff = 1 - (unnormalized_view2[:10] - img[:10])
+            grid = make_grid(torch.cat([img[:10], unnormalized_view1[:10], view1_diff]), nrow=10)
+            grid = torch.clamp(torchvision.transforms.Resize(512)(grid), 0, 1)
+            view1_view2_grid = make_grid(torch.cat([view1_diff, view2_diff]), nrow=10)
+            view1_view2_grid = torch.clamp(torchvision.transforms.Resize(512)(view1_view2_grid), 0, 1)
+            if isinstance(self.logger, WandbLogger):
+                wandb.log({"original_vs_views": wandb.Image(grid,
+                                                            caption=f"Epoch: {self.current_epoch}, Step {self.global_step}"),
+                           "budget": self.viewmaker.distortion_budget,
+                           "mean distortion": (1 - view1_diff).abs().mean(),
+                           "view1_vs_view2": wandb.Image(view1_view2_grid,
+                                                         caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")
+                           })
 
         return emb_dict
 

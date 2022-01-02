@@ -1,6 +1,7 @@
 {
     "exp_base": null,
-    "exp_name": "viewmaker-disc | pretrained simclr encoder",
+    "exp_name": "viewmaker-disc",
+    "project": "viewmaker",
     "system": "PretrainViewMakerSystemDisc",
     "cuda": true,
     "gpu_device": 0,
@@ -21,18 +22,20 @@
         "num_res_blocks": 3,
         "use_budget": true,
         "budget_sched": "random_normal",
-        "budget_mean": 0.3,
-        "budget_std": 0.2,
-        "budget_aware": true,
-        "viewmaker_backbone": "Viewmaker"
+        "budget_mean": 0.05,
+        "budget_aware": false,
+        "viewmaker_backbone": "Viewmaker",
+        "additive": 1,
+        "multiplicative": 0,
+        "tps": 0
     },
     "disc": {
         "dis_skip_steps": 0,
-        "vm_gen_loss_weight": 0.1,
+        "vm_gen_loss_weight": 0.01,
         "r1_penalty_weight": 0,
         "conv_blocks": 4,
         "wgan": false,
-        "gan_warmup": 1
+        "gan_warmup": 10
     },
     "loss_params": {
         "objective": "AdversarialSimCLRLoss",

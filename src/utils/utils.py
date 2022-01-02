@@ -89,3 +89,20 @@ def compute_accuracy(output, target, topk=(1,)):
         correct_k = correct[:k].reshape(-1).float().sum(0)
         res.append(correct_k.item())
     return res
+
+class delayed_linear_schedule:
+
+    def __init__(self, start_val, stop_val, start_step, stop_step):
+        self.start_step = start_step
+        self.start_val = start_val
+        self.stop_val = stop_val
+        self.stop_step = stop_step
+        self.ramp_up_vals = np.linspace(start_val, stop_val, stop_step-start_step)
+
+    def __getitem__(self, step):
+        if step < self.start_step:
+            return self.start_val
+        elif self.start_step <= step < self.stop_step:
+            return self.ramp_up_vals[step-self.start_step]
+        else:
+            return self.stop_val

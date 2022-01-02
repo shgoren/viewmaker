@@ -71,9 +71,9 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
     def get_budget(self):
         if self.budget_sched == "random_normal":
             if not hasattr(self, "budget_steps"):
-                self.budget_steps = utils.delayed_linear_schedule(0.05, self.budget_mean, 2, 100)
+                self.budget_steps = utils.delayed_linear_schedule(0.05, self.budget_mean, 2, 50)
             curr_mean = self.budget_steps[self.current_epoch]
-            return max(np.random.normal(curr_mean, curr_mean*0.3), 0)
+            return max(np.random.normal(curr_mean, curr_mean*0.6), 0)
 
         elif self.budget_sched == "linear":
             if not hasattr(self, "budget_steps"): # TODO: untested
@@ -117,7 +117,7 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         return TinyP2PDiscriminator(wgan=self.config.disc.wgan, blocks_num=self.config.disc.conv_blocks)
 
     def create_viewmaker(self):
-        VMClass = viewmaker.VIEWMAKERS[self.config.model_params.viewmaker_backbone or 'Viewmaker']
+        VMClass = viewmaker.VIEWMAKERS[self.config.model_params.viewmaker_backbone]
         view_model = VMClass(
             num_channels=self.train_dataset.NUM_CHANNELS,
             distortion_budget=self.config.model_params.view_bound_magnitude,
@@ -129,9 +129,9 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             use_budget=self.config.model_params.use_budget,
             budget_aware=self.config.model_params.budget_aware,
             image_dim = (32,32),
-            multiplicative=self.config.model_params.multiplicative,
-            additive=self.config.model_params.additive,
-            tps=self.config.model_params.tps
+            multiplicative=self.config.model_params.multiplicative or 0,
+            additive=self.config.model_params.additive or 1,
+            tps=self.config.model_params.tps or 0
         )
         return view_model
 

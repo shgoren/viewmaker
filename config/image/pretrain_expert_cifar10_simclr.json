@@ -12,7 +12,7 @@
         "default_augmentations": "all"
     },
     "model_params": {
-        "out_dim": 128,
+        "out_dim": 100,
         "resnet": true,
         "resnet_version": "resnet18",
         "resnet_small": true,
@@ -23,7 +23,7 @@
         "name": "simclr"
     },
     "optim_params": {
-        "batch_size": 256,
+        "batch_size": 128,
         "learning_rate": 0.03,
         "momentum": 0.9,
         "weight_decay": 1e-4,
