@@ -2,15 +2,15 @@ from collections import OrderedDict
 
 import numpy as np
 import pytorch_lightning as pl
+from pytorch_lightning.loggers.wandb import WandbLogger
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import wandb
-from pytorch_lightning.loggers import WandbLogger
 from torch import autograd
-from torchvision.utils import make_grid
 from torchvision import models
+from torchvision.utils import make_grid
 
 from viewmaker.src.datasets import datasets
 from viewmaker.src.models import resnet_small
@@ -115,12 +115,14 @@ class PretrainViewMakerSystem(pl.LightningModule):
         )
         return view_model
 
-    def view(self, imgs):
+    def view(self, imgs, with_unnormalized = False):
         if 'Expert' in self.config.system:
             raise RuntimeError('Cannot call self.view() with Expert system')
-        views_unn = self.viewmaker(imgs)
-        views = self.normalize(views_unn)
-        return views, views_unn
+        unnormalized = self.viewmaker(imgs)
+        views = self.normalize(unnormalized)
+        if with_unnormalized:
+            return views, unnormalized
+        return views
 
     def noise(self, batch_size, device):
         shape = (batch_size, self.config.model_params.noise_dim)
@@ -159,8 +161,9 @@ class PretrainViewMakerSystem(pl.LightningModule):
             if self.config.model_params.double_viewmaker:
                 view1, view2 = self.view(img)
             else:
-                view1, unnormalized_view1 = self.view(img)
-                view2, unnormalized_view2 = self.view(img2)
+                # return unnormalized for plotting
+                view1,unnormalized_view1 = self.view(img,True)
+                view2, unnormalized_view2 = self.view(img2, True)
             emb_dict = {
                 'indices': indices,
                 'view1_embs': self.model(view1),
@@ -175,7 +178,11 @@ class PretrainViewMakerSystem(pl.LightningModule):
             # row of images, row of diff, row of view
             view1_diff = 1 - (unnormalized_view1[:10] - img[:10])
             view2_diff = 1 - (unnormalized_view2[:10] - img[:10])
-            grid = make_grid(torch.cat([img[:10], unnormalized_view1[:10], view1_diff]), nrow=10)
+            grid = make_grid(torch.cat([img[:10],
+                                        unnormalized_view1[:10]/(img[:10]+1e-6),
+                                        unnormalized_view1[:10],
+                                        view1_diff]
+                                       ),nrow=10)
             grid = torch.clamp(torchvision.transforms.Resize(512)(grid), 0, 1)
             view1_view2_grid = make_grid(torch.cat([view1_diff, view2_diff]), nrow=10)
             view1_view2_grid = torch.clamp(torchvision.transforms.Resize(512)(view1_view2_grid), 0, 1)
@@ -187,7 +194,6 @@ class PretrainViewMakerSystem(pl.LightningModule):
                            "view1_vs_view2": wandb.Image(view1_view2_grid,
                                                          caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")
                            })
-
         return emb_dict
 
     def get_losses_for_batch(self, emb_dict, train=True):
@@ -280,8 +286,17 @@ class PretrainViewMakerSystem(pl.LightningModule):
         self.log_dict(metrics)
         return loss
 
-    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu=False,
-                       using_native_amp=False, using_lbfgs=False):
+    def optimizer_step(
+            self,
+            epoch,
+            batch_idx,
+            optimizer,
+            optimizer_idx,
+            optimizer_closure,
+            on_tpu=False,
+            using_native_amp=False,
+            using_lbfgs=False,
+    ):
         # update viwmaker every step
         if optimizer_idx == 0:
             super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,

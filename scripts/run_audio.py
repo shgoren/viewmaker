@@ -1,12 +1,19 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+os.environ["OMP_NUM_THREADS"] = "3"
+os.environ["MKL_NUM_THREADS"] = "3"
+import random, torch, numpy
+torch.set_num_threads(3)
 import wandb
 from copy import deepcopy
 from  viewmaker.src.systems import audio_systems
 from  viewmaker.src.utils.utils import load_json
 from  viewmaker.src.utils.setup import process_config
-import random, torch, numpy
+
+from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
 
 import pytorch_lightning as pl
+
 
 SYSTEM = {
     'PretrainExpertInstDiscSystem': audio_systems.PretrainExpertInstDiscSystem,
@@ -75,26 +82,35 @@ def run(args, gpu_device=None):
     ckpt_callback = pl.callbacks.ModelCheckpoint(
         os.path.join(config.exp_dir, 'checkpoints'),
         save_top_k=-1,
-        every_n_epochs=1,
+        every_n_epochs=config['copy_checkpoint_freq'],
     )
-    callbacks.append(ckpt_callback)
-    wandb.init(project='audio_viewmaker', entity='vm', name=config.exp_name, config=config, sync_tensorboard=True)
+
+    if not args.debug:
+        wandblogger = WandbLogger(project='audio-viewmaker',entity="shafir")
+        wandblogger.log_hyperparams(config)
+
+    else:
+        wandblogger = TensorBoardLogger(config.exp_dir)
+        
+    # callbacks.append(ckpt_callback)
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
         gpus=gpu_device,
          # 'ddp' is usually faster, but we use 'dp' so the negative samples 
          # for the whole batch are used for the SimCLR loss
-        distributed_backend=config.distributed_backend or 'dp',
+        # distributed_backend=config.distributed_backend or 'dp',
+        strategy='dp',
         max_epochs=config.num_epochs,
         min_epochs=config.num_epochs,
-        checkpoint_callback=True,
+        checkpoint_callback=ckpt_callback,
         resume_from_checkpoint=args.ckpt or config.continue_from_checkpoint,
         profiler=args.profiler,
         precision=config.optim_params.precision or 32,
         callbacks=callbacks,
         val_check_interval=config.val_check_interval or 1.0,
         limit_val_batches=config.limit_val_batches or 1.0,
-        num_sanity_val_steps=-1,
+        logger=wandblogger
+        # num_sanity_val_steps=-1,
     )
     trainer.fit(system)
 
@@ -115,6 +131,7 @@ if __name__ == "__main__":
     parser.add_argument('--gpu-device', type=str, default=None)
     parser.add_argument('--profiler', action='store_true')
     parser.add_argument('--ckpt', type=str, default=None)
+    parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
 
     # Ensure it's a string, even if from an older config
