@@ -1,5 +1,6 @@
 import os
 from viewmaker.src.systems import image_systems
+from viewmaker.src.utils.callbacks import MoCoLRScheduler
 from viewmaker.src.utils.setup import process_config
 import random, torch, numpy
 
@@ -79,7 +80,6 @@ def run(args):
         max_epochs=config.num_epochs,
         min_epochs=config.num_epochs,
         checkpoint_callback=True,
-        resume_from_checkpoint=args.ckpt or config.continue_from_checkpoint,
         profiler=args.profiler,
         precision=config.optim_params.precision or 32,
         callbacks=callbacks,
@@ -88,7 +88,7 @@ def run(args):
         logger=wandblogger,
         log_every_n_steps=50
     )
-    trainer.fit(system)
+    trainer.fit(system, ckpt_path=args.ckpt or config.continue_from_checkpoint)
 
 
 def seed_everything(seed):

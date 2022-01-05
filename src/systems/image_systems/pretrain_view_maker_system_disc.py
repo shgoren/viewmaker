@@ -40,7 +40,6 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         self.t = self.config.loss_params.t
         self.adv_loss_weight = self.config.disc.vm_gen_loss_weight
         self.r1_penalty_weight = self.config.disc.r1_penalty_weight
-        self.budget_mean = self.config.model_params.budget_mean
 
         self.train_dataset, self.val_dataset = datasets.get_image_datasets(
             config.data_params.dataset,
@@ -50,7 +49,10 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         train_labels = self.train_dataset.dataset.targets
         self.train_ordered_labels = np.array(train_labels)
 
+        # TODO: move all the budget management into the viewmaker
         self.budget_sched = config.model_params.budget_sched or False
+        if self.budget_sched:
+            self.budget_steps = utils.delayed_linear_schedule(0.05, self.config.model_params.additive_budget, 2, 100)
 
         if config.model_params.pretrained or False:
             self.model = self.load_pretrained_encoder()
@@ -70,16 +72,10 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
 
     def get_budget(self):
         if self.budget_sched == "random_normal":
-            if not hasattr(self, "budget_steps"):
-                self.budget_steps = utils.delayed_linear_schedule(0.05, self.budget_mean, 2, 100)
             curr_mean = self.budget_steps[self.current_epoch]
-            return max(np.random.normal(curr_mean, curr_mean*0.3), 0)
+            return max(np.random.normal(curr_mean, curr_mean*0.6), 0)
 
         elif self.budget_sched == "linear":
-            if not hasattr(self, "budget_steps"): # TODO: untested
-                self.budget_steps = utils.delayed_linear_schedule(0.05, 1, 30, 180)
-            if not self.budget_sched:
-                return self.distortion_budget
             return self.budget_steps[self.current_epoch]
 
     def create_encoder(self):
@@ -117,10 +113,12 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         return TinyP2PDiscriminator(wgan=self.config.disc.wgan, blocks_num=self.config.disc.conv_blocks)
 
     def create_viewmaker(self):
+        assert isinstance(self.config.model_params.view_bound_magnitude, DotMap),\
+            "view_bound_magnitude parameter is no longer in use, please provider type specific budget"
+
         VMClass = viewmaker.VIEWMAKERS[self.config.model_params.viewmaker_backbone or 'Viewmaker']
         view_model = VMClass(
             num_channels=self.train_dataset.NUM_CHANNELS,
-            distortion_budget=self.config.model_params.view_bound_magnitude,
             activation=self.config.model_params.generator_activation or 'relu',
             clamp=self.config.model_params.clamp_views or True,
             frequency_domain=self.config.model_params.spectral or False,
@@ -130,8 +128,11 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             budget_aware=self.config.model_params.budget_aware,
             image_dim = (32,32),
             multiplicative=self.config.model_params.multiplicative,
+            multiplicative_budget=self.config.model_params.multiplicative_budget or 0.25,
             additive=self.config.model_params.additive,
-            tps=self.config.model_params.tps
+            additive_budget=self.config.model_params.additive_budget or 0.05,
+            tps=self.config.model_params.tps,
+            tps_budget=self.config.model_params.tps_budget,
         )
         return view_model
 
@@ -215,7 +216,7 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             if isinstance(self.logger, WandbLogger):
                 wandb.log({"original_vs_views": wandb.Image(grid,
                                                             caption=f"Epoch: {self.current_epoch}, Step {self.global_step}"),
-                           "budget": self.viewmaker.distortion_budget,
+                           "budget": self.viewmaker.additive_budget,
                            "mean distortion": (1-view1_diff).abs().mean(),
                            "view1_vs_view2": wandb.Image(view1_view2_grid,
                                                          caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")
@@ -232,7 +233,7 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
                 t=self.t,
                 view_maker_loss_weight=view_maker_loss_weight
             )
-            encoder_loss, encoder_acc, view_maker_loss = loss_function.get_loss()
+            encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim = loss_function.get_loss()
             img_embs = emb_dict['orig_embs']
         elif self.loss_name == 'AdversarialNCELoss':
             view_maker_loss_weight = self.config.loss_params.view_maker_loss_weight
@@ -281,7 +282,7 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
 
         losses = {'encoder_loss': encoder_loss, 'encoder_acc': encoder_acc, 'view_maker_loss': view_maker_loss,
                   'gen_loss': gen_loss, 'disc_loss': disc_loss, 'disc_acc': disc_acc, 'gan_acc': gen_acc,
-                  'disc_r1_penalty': disc_r1_penalty}
+                  'disc_r1_penalty': disc_r1_penalty, "positive_sim":positive_sim, "negative_sim":negative_sim}
         return losses
 
     def get_nearest_neighbor_label(self, img_embs, labels):
@@ -312,7 +313,7 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         losses = self.get_losses_for_batch(emb_dict, train=True)
 
         if self.budget_sched:
-            self.viewmaker.distortion_budget = self.get_budget()
+            self.viewmaker.additive_budget = self.get_budget()
 
         # assuming they fixed taht in new versions
         # # Handle Tensor (dp) and int (ddp) cases
@@ -323,7 +324,9 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
 
         if optimizer_idx == 0:
             metrics = {
-                'encoder_loss': losses['encoder_loss'], "train_acc": losses['encoder_acc']
+                'encoder_loss': losses['encoder_loss'], "train_acc": losses['encoder_acc'],
+                "positive_sim": losses["positive_sim"],
+                "negative_sim": losses["negative_sim"],
             }
             loss = losses['encoder_loss']
 
@@ -400,8 +403,10 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             'val_disc_loss': losses['disc_loss'],
             'val_disc_acc': losses['disc_acc'],
             'val_encoder_acc': losses['encoder_acc'],
+            "val_positive_sim": losses["positive_sim"],
+            "val_negative_sim": losses["negative_sim"],
             'val_zero_knn_correct': torch.tensor(num_correct, dtype=float, device=self.device),
-            'val_num_total': torch.tensor(batch_size, dtype=float, device=self.device)
+            'val_num_total': torch.tensor(batch_size, dtype=float, device=self.device),
         })
         return output
 

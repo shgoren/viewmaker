@@ -18,11 +18,13 @@
         "resnet_small": true,
         "projection_head": false,
         "noise_dim": 100,
-        "view_bound_magnitude": 0.3,
         "num_res_blocks": 3,
         "additive": 0,
+        "additive_budget": 0.05,
         "multiplicative": 0,
-        "tps": 1
+        "multiplicative_budget": 0.1,
+        "tps": 1,
+        "tps_budget": 0.1
     },
     "loss_params": {
         "objective": "AdversarialSimCLRLoss",

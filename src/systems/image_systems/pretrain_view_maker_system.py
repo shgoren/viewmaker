@@ -2,6 +2,7 @@ from collections import OrderedDict
 
 import numpy as np
 import pytorch_lightning as pl
+from dotmap import DotMap
 from pytorch_lightning.loggers.wandb import WandbLogger
 import torch
 import torch.nn as nn
@@ -99,9 +100,11 @@ class PretrainViewMakerSystem(pl.LightningModule):
         return resnet18
 
     def create_viewmaker(self):
+        if not isinstance(self.config.model_params.view_bound_magnitude, DotMap):
+            self.config.model_params.additive_budget = self.config.model_params.view_bound_magnitude
+
         view_model = viewmaker.Viewmaker(
             num_channels=self.train_dataset.NUM_CHANNELS,
-            distortion_budget=self.config.model_params.view_bound_magnitude,
             activation=self.config.model_params.generator_activation or 'relu',
             clamp=self.config.model_params.clamp_views,
             frequency_domain=self.config.model_params.spectral or False,
@@ -109,9 +112,14 @@ class PretrainViewMakerSystem(pl.LightningModule):
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
             use_budget=True,
             image_dim = (32,32),
-            multiplicative=self.config.model_params.multiplicative,
-            additive=self.config.model_params.additive,
-            tps=self.config.model_params.tps
+            multiplicative=self.config.model_params.multiplicative or 0,
+            multiplicative_budget=self.config.model_params.multiplicative_budget or 0.25,
+            additive=self.config.model_params.additive or 1,
+            additive_budget=self.config.model_params.additive_budget or 0.05,
+            tps=self.config.model_params.tps or 0,
+            tps_budget=self.config.model_params.tps_budget or 0.1,
+            aug_proba=self.config.model_params.aug_proba or 1,
+            budget_aware=self.config.model_params.budget_aware or False
         )
         return view_model
 
@@ -189,7 +197,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
             if isinstance(self.logger, WandbLogger):
                 wandb.log({"original_vs_views": wandb.Image(grid,
                                                             caption=f"Epoch: {self.current_epoch}, Step {self.global_step}"),
-                           "budget": self.viewmaker.distortion_budget,
+                           # "budget": self.viewmaker.distortion_budget,
                            "mean distortion": (1 - view1_diff).abs().mean(),
                            "view1_vs_view2": wandb.Image(view1_view2_grid,
                                                          caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")
@@ -205,7 +213,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
                 t=self.t,
                 view_maker_loss_weight=view_maker_loss_weight
             )
-            encoder_loss, encoder_acc, view_maker_loss = loss_function.get_loss()
+            encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim = loss_function.get_loss()
             img_embs = emb_dict['orig_embs']
         elif self.loss_name == 'AdversarialNCELoss':
             view_maker_loss_weight = self.config.loss_params.view_maker_loss_weight
@@ -232,7 +240,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
                 else:
                     new_data_memory = utils.l2_normalize(img_embs, dim=1)
                     self.memory_bank.update(emb_dict['indices'], new_data_memory)
-        return encoder_loss, encoder_acc, view_maker_loss
+        return encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim
 
     def get_nearest_neighbor_label(self, img_embs, labels):
         '''
@@ -260,7 +268,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
         return emb_dict
 
     def training_step_end(self, emb_dict):
-        encoder_loss, encoder_acc, view_maker_loss = self.get_losses_for_batch(emb_dict, train=True)
+        encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim = self.get_losses_for_batch(emb_dict, train=True)
 
         if self.budget_sched:
             self.viewmaker.distortion_budget = self.get_budget()
@@ -274,7 +282,8 @@ class PretrainViewMakerSystem(pl.LightningModule):
 
         if optimizer_idx == 0:
             metrics = {
-                'encoder_loss': encoder_loss, "train_acc": encoder_acc
+                'encoder_loss': encoder_loss, "train_acc": encoder_acc,
+                "positive_sim":positive_sim, "negative_sim": negative_sim
             }
             loss = encoder_loss
         elif optimizer_idx == 1:
@@ -321,17 +330,33 @@ class PretrainViewMakerSystem(pl.LightningModule):
             _, img, _, _, _ = batch
             img_embs = self.get_repr(img)  # Need encoding of image without augmentations (only normalization).
         labels = batch[-1]
-        encoder_loss, encoder_acc, view_maker_loss = self.get_losses_for_batch(
+        encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim = self.get_losses_for_batch(
             emb_dict, train=False)
-
         num_correct, batch_size = self.get_nearest_neighbor_label(img_embs, labels)
+
+        if batch_idx==0:
+            self.train_linear_probe()
+        probe_score = self.linear_probe.score(img_embs.detach().cpu().numpy(), labels.cpu().numpy())
+        probe_score = torch.Tensor([probe_score])
+
         output = OrderedDict({
             'val_encoder_loss': encoder_loss,
             'val_view_maker_loss': view_maker_loss,
             'val_zero_knn_correct': torch.tensor(num_correct, dtype=float, device=self.device),
             'val_num_total': torch.tensor(batch_size, dtype=float, device=self.device),
+            'val_positive_sim': positive_sim,
+            'val_negative_sim': negative_sim,
+            'val_linear_probe_score': probe_score,
         })
         return output
+
+    def train_linear_probe(self):
+        from sklearn.linear_model import LogisticRegression
+        train_X, train_y = self.memory_bank._bank.cpu().numpy(), self.train_ordered_labels
+        self.linear_probe = LogisticRegression()
+        self.linear_probe.fit(train_X, train_y)
+
+
 
     def validation_epoch_end(self, outputs):
         metrics = {}

@@ -12,7 +12,7 @@ from torch.autograd import Variable
 
 class TPSDecoder(nn.Module):
 
-    def __init__(self, input_dim, image_hw, span_range_hw=(0.9, 0.9), grid_hw=(4,4)):
+    def __init__(self, input_dim, image_hw, span_range_hw=(0.9, 0.9), grid_hw=(4, 4)):
         """
         :param input_dim: (C,H,W)
         :param image_hw: original image dimensions (H,W)
@@ -39,20 +39,26 @@ class TPSDecoder(nn.Module):
 
         self.tps = TPSGridGen(*image_hw, self.target_control_points)
 
-    def forward(self, f, img, budget):
+    def forward(self, f, budget):
         source_control_points = self.loc_net(f)
         budgeted_control_points = self.restrain_control_points(source_control_points, budget)
         source_coordinate = self.tps(budgeted_control_points)
         grid = source_coordinate.view(-1, *self.image_hw, 2)
-        transformed_x = grid_sample(img, grid)
-        return transformed_x
+
+        def transform_paratial(img, p):
+            result = grid_sample(img, grid)
+            mask = (p > torch.rand(grid.size(0), 1, 1, 1, device=img.device)).float()
+            result = result * mask + img * (1 - mask)
+            return result
+
+        return transform_paratial
 
     def restrain_control_points(self, source_control_points, budget):
         self.target_control_points = self.target_control_points.to(source_control_points.device)
         diff_vectors = self.target_control_points - source_control_points
         diff_norm = torch.norm(diff_vectors, dim=2)
         morph_size = diff_norm.mean(1)
-        delta = diff_vectors/(morph_size.reshape(-1,1,1) + 1e-5) * budget
+        delta = diff_vectors / (morph_size.reshape(-1, 1, 1) + 1e-5) * budget
         restrained_control_points = self.target_control_points - delta
         return restrained_control_points
 
@@ -112,6 +118,7 @@ def compute_partial_repr(input_points, control_points):
     repr_matrix.masked_fill_(mask, 0)
     return repr_matrix
 
+
 class TPSGridGen(nn.Module):
 
     def __init__(self, target_height, target_width, target_control_points):
@@ -136,15 +143,15 @@ class TPSGridGen(nn.Module):
         # create target cordinate matrix
         HW = target_height * target_width
         target_coordinate = list(itertools.product(range(target_height), range(target_width)))
-        target_coordinate = torch.Tensor(target_coordinate) # HW x 2
-        Y, X = target_coordinate.split(1, dim = 1)
+        target_coordinate = torch.Tensor(target_coordinate)  # HW x 2
+        Y, X = target_coordinate.split(1, dim=1)
         Y = Y * 2 / (target_height - 1) - 1
         X = X * 2 / (target_width - 1) - 1
-        target_coordinate = torch.cat([X, Y], dim = 1) # convert from (y, x) to (x, y)
+        target_coordinate = torch.cat([X, Y], dim=1)  # convert from (y, x) to (x, y)
         target_coordinate_partial_repr = compute_partial_repr(target_coordinate, target_control_points)
         target_coordinate_repr = torch.cat([
             target_coordinate_partial_repr, torch.ones(HW, 1), target_coordinate
-        ], dim = 1)
+        ], dim=1)
 
         # register precomputed matrices
         self.register_buffer('inverse_kernel', inverse_kernel)
@@ -162,7 +169,8 @@ class TPSGridGen(nn.Module):
         source_coordinate = torch.matmul(Variable(self.target_coordinate_repr), mapping_matrix)
         return source_coordinate
 
-def grid_sample(input, grid, canvas = None):
+
+def grid_sample(input, grid, canvas=None):
     output = F.grid_sample(input, grid)
     if canvas is None:
         return output
@@ -172,10 +180,11 @@ def grid_sample(input, grid, canvas = None):
         padded_output = output * output_mask + canvas * (1 - output_mask)
         return padded_output
 
+
 def test_tps():
     import matplotlib.pyplot as plt
-    tps = TPSDecoder(64, (32,32))
-    f = torch.rand((1,64))
-    img = torch.rand((1,1,32,32))
+    tps = TPSDecoder(64, (32, 32))
+    f = torch.rand((1, 64))
+    img = torch.rand((1, 1, 32, 32))
     res = tps(f, img, 0.05)
     print(res)

@@ -13,6 +13,7 @@ from sklearn.metrics import f1_score
 from viewmaker.src.datasets import datasets
 from viewmaker.src.models.transfer import LogisticRegression
 from viewmaker.src.utils import utils
+from . import PretrainViewMakerSystem, PretrainViewMakerSystemDisc
 from ..image_systems.utils import create_dataloader
 
 class TransferViewMakerSystem(pl.LightningModule):

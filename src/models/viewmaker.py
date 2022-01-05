@@ -5,6 +5,7 @@ Adapted from the transformer_net.py example below, using methods proposed in Joh
 Link:
 https://github.com/pytorch/examples/blob/0c1654d6913f77f09c0505fb284d977d89c17c1a/fast_neural_style/neural_style/transformer_net.py
 '''
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -22,9 +23,10 @@ ACTIVATIONS = {
 class Viewmaker(torch.nn.Module):
     '''Viewmaker network that stochastically maps a multichannel 2D input to an output of the same size.'''
 
-    def __init__(self, num_channels=3, distortion_budget=0.05, activation='relu',
+    def __init__(self, num_channels=3, activation='relu',
                  clamp=True, frequency_domain=False, downsample_to=False, num_res_blocks=5,
-                 additive=1, multiplicative=0, tps=0, use_budget=True, budget_aware=False, image_dim=None):
+                 additive=1, multiplicative_budget=0.25, multiplicative=0, additive_budget=0.05, tps=0, tps_budget=0.1,
+                 use_budget=True, budget_aware=False, image_dim=None, aug_proba=1):
         '''Initialize the Viewmaker network.
 
         Args:
@@ -41,7 +43,10 @@ class Viewmaker(torch.nn.Module):
             num_res_blocks: Number of residual blocks to use in the network.
         '''
         super().__init__()
-
+        self.aug_proba = aug_proba
+        self.additive_budget = additive_budget
+        self.multiplicative_budget = multiplicative_budget
+        self.tps_budget = tps_budget
         self.use_budget = use_budget
         self.num_channels = num_channels
         self.num_res_blocks = num_res_blocks
@@ -49,7 +54,6 @@ class Viewmaker(torch.nn.Module):
         self.clamp = clamp
         self.frequency_domain = frequency_domain
         self.downsample_to = downsample_to
-        self.distortion_budget = distortion_budget
         self.act = ACTIVATIONS[activation]
         self.multiplicative = multiplicative
         self.additive = additive
@@ -83,15 +87,17 @@ class Viewmaker(torch.nn.Module):
         ## shahaf change ##
         # viewmaker has multiple decoders to add variability
         assert additive + multiplicative + tps > 0, "no augmentation specified"
-        if additive + multiplicative >0:
-            self.pixel_transforms = nn.ModuleList([self._full_size_output_net() for _ in range(self.additive + self.multiplicative)])
+        if additive + multiplicative > 0:
+            self.pixel_transforms = nn.ModuleList(
+                [self._full_size_output_net() for _ in range(self.additive + self.multiplicative)])
         else:
             self.pixel_transforms = None
 
         if tps > 0:
             assert image_dim is not None, "image dimensions are required for tps augmentations"
 
-            self.geometric_transforms = nn.ModuleList([TPSDecoder(last_feature_dim, image_dim, grid_hw=(2,2)) for _ in range(self.tps)])
+            self.geometric_transforms = nn.ModuleList(
+                [TPSDecoder(last_feature_dim, image_dim, grid_hw=(2, 2)) for _ in range(self.tps)])
         else:
             self.geometric_transforms = None
 
@@ -108,7 +114,8 @@ class Viewmaker(torch.nn.Module):
 
     def _full_size_output_net(self):
         return nn.Sequential(
-            UpsampleConvLayer(128 + self.num_res_blocks + int(self.budget_aware), 64, kernel_size=3, stride=1, upsample=2),
+            UpsampleConvLayer(128 + self.num_res_blocks + int(self.budget_aware), 64, kernel_size=3, stride=1,
+                              upsample=2),
             torch.nn.InstanceNorm2d(64, affine=True),
             self.act(),
             ResidualBlock(64),
@@ -151,29 +158,33 @@ class Viewmaker(torch.nn.Module):
         # [batch_size, 128]
         features = f.clone().mean([-1, -2])
 
-        for i, res in enumerate([self.res1, self.res2, self.res3, self.res4, self.res5, self.res6, self.res7, self.res8]):
+        for i, res in enumerate(
+                [self.res1, self.res2, self.res3, self.res4, self.res5, self.res6, self.res7, self.res8]):
             if i < num_res_blocks:
                 f = res(self.add_noise_channel(f, bound_multiplier=bound_multiplier))
 
         # if self.dynamic_budget:
         #     self.distortion_budget = F.sigmoid(self.budget_net(f).mean())
 
-        ## shahaf ##
-        # modifiers are a generalizations of the residuals
         if self.pixel_transforms:
             if self.budget_aware:
-                f = torch.cat([f, torch.full_like(f[:,[0],:,:], self.distortion_budget)], dim=1)
-            modifiers = torch.stack([up(f) for up in self.pixel_transforms], dim=1)
+                # TODO: adapt to multiple budgets
+                f = torch.cat([f, torch.full_like(f[:, [0], :, :], self.additive_budget)], dim=1)
+            pixel_aug = [up(f) for up in self.pixel_transforms]
+            add_aug, mul_aug = pixel_aug[:self.additive], pixel_aug[self.additive:]
+            pixel_aug = [lambda img, p: self.add_residual(img, resid, p) for resid in add_aug] + \
+                        [lambda img, p: self.apply_learned_mask(img, mask, p) for mask in mul_aug]
         else:
-            modifiers = None
+            pixel_aug = None
+
         if self.geometric_transforms:
-            geometric_views = torch.stack([up(f, x, self.distortion_budget) for up in self.geometric_transforms], dim=1)
+            geometric_aug = [up(f, self.tps_budget) for up in self.geometric_transforms]
         else:
-            geometric_views = None
+            geometric_aug = None
 
-        return modifiers, geometric_views, features
+        return pixel_aug, geometric_aug, features
 
-    def get_delta(self, y_pixels, eps=1e-6):
+    def get_additive_delta(self, y_pixels, eps=1e-6):
         """
         Constrains the input perturbation by projecting it onto an L1 sphere
         :param y_pixels: (b,v,h,w)
@@ -181,7 +192,7 @@ class Viewmaker(torch.nn.Module):
         :return:
         """
 
-        distortion_budget = self.distortion_budget
+        distortion_budget = self.additive_budget
         delta = torch.tanh(y_pixels)  # Project to [-1, 1]
         if self.use_budget:
             avg_magnitude = delta.abs().mean([1, 2, 3], keepdim=True)
@@ -203,24 +214,17 @@ class Viewmaker(torch.nn.Module):
             # shape still [batch_size, C, W, H]
             y = dct.dct_2d(y)
 
-        modifiers, geometric_views, features = self.basic_net(y, self.num_res_blocks, bound_multiplier=1)
-        result = []
-        # shahaf #
-        # masks are multiplicative and residual are additive
-        if modifiers is not None:
-            masks, residuals = modifiers[:, :self.multiplicative], modifiers[:, self.multiplicative:]
+        pixel_augmentations, geometric_augmentations, features = self.basic_net(y, self.num_res_blocks,
+                                                                                bound_multiplier=1)
+        result = x_orig
+        if pixel_augmentations is not None:
+            for pix_aug in pixel_augmentations:
+                result = pix_aug(result, self.aug_proba)
 
-            for i in range(residuals.size(1)):
-                view = residuals[:, i]
-                result.append(self.add_residual(x_orig, view))
+        if geometric_augmentations is not None:
+            for geo_mod in geometric_augmentations:
+                result = geo_mod(result, self.aug_proba)
 
-            for i in range(masks.size(1)):
-                view = masks[:, i]
-                result.append(self.apply_learned_mask(x_orig, view))
-        if geometric_views is not None:
-            result.extend(geometric_views.unbind(1))
-
-        result = torch.stack(result).transpose(0, 1).reshape(-1, *result[0].shape[1:])
         return result
 
     def get_mask_delta(self, y_pixels, eps=1e-4):
@@ -231,19 +235,20 @@ class Viewmaker(torch.nn.Module):
         :return:
         """
 
-        distortion_budget = self.distortion_budget
+        distortion_budget = self.multiplicative_budget
         delta = torch.sigmoid(y_pixels) * 2  # Project to [0, 2]
         if self.use_budget:
             # avg_magnitude = delta.mean([1, 2, 3], keepdim=True)
-            avg_magnitude = (1-delta).abs().mean([1, 2, 3], keepdim=True)
+            avg_magnitude = (1 - delta).abs().mean([1, 2, 3], keepdim=True)
             max_magnitude = distortion_budget
             # delta = 1-( max_magnitude + delta - avg_magnitude )
-            delta = 1 - ((1-delta) * (max_magnitude / (avg_magnitude + eps)))
+            delta = 1 - ((1 - delta) * (max_magnitude / (avg_magnitude + eps)))
             # delta = 1-((1-delta)*max_magnitude/avg_magnitude)
         return delta
-# Im = 1-((1-image)*budget/average(1-image))
 
-    def apply_learned_mask(self, x, mask):
+    # Im = 1-((1-image)*budget/average(1-image))
+
+    def apply_learned_mask(self, x, mask, p=1):
         delta = self.get_mask_delta(mask)
         # delta_min = delta.view(b,h*w).min(1,keepdim=True)[0].view(b,1,1,1)
         # delta_max = delta.view(b,h*w).max(1,keepdim=True)[0].view(b,1,1,1)
@@ -257,12 +262,16 @@ class Viewmaker(torch.nn.Module):
         # eps = 1e-8
         # # multiplicative = (((intensity_mask+eps)/(intensity_mask+m+eps))-0.5)*(2*(M+m+eps)/(M-m+eps))
         # multiplicative = (delta - delta_min + eps) / (delta_max-delta_min + eps) + 0.6
-        res = x * delta
-        res = torch.clamp(res, 0, 1.0)
-        return res
+        result = x * delta
+        if self.clamp:
+            result = torch.clamp(result, 0, 1.0)
 
-    def add_residual(self, x, residual):
-        delta = self.get_delta(residual)
+        mask = (p > torch.rand(x.size(0), 1, 1, 1, device=x.device)).float()
+        result = result * mask + x * (1 - mask)
+        return result
+
+    def add_residual(self, x, residual, p=1):
+        delta = self.get_additive_delta(residual)
         if self.frequency_domain:
             # Compute inverse DCT from frequency domain to time domain.
             delta = dct.idct_2d(delta)
@@ -274,8 +283,10 @@ class Viewmaker(torch.nn.Module):
         result = x + delta
         if self.clamp:
             result = torch.clamp(result, 0, 1.0)
-        return result
 
+        mask = (p > torch.rand(x.size(0), 1, 1, 1, device=x.device)).float()
+        result = result * mask + x * (1 - mask)
+        return result
 
 
 class ViewmakerPix2Pix(Viewmaker):
@@ -309,7 +320,7 @@ class ViewmakerPix2Pix(Viewmaker):
         self.num_views = num_views
 
         torch.manual_seed(2)
-        self.encoder = TinyP2PEncoder(num_channels+1)
+        self.encoder = TinyP2PEncoder(num_channels + 1)
         self.upsampling = nn.ModuleList(
             [TinyP2PDecoder(num_channels) for _ in range(self.num_views)])  # TODO: check adding instance norm
 
@@ -324,7 +335,7 @@ class ViewmakerPix2Pix(Viewmaker):
 
         return modifiers, f
 
-    def get_delta(self, delta, eps=1e-4):
+    def get_additive_delta(self, delta, eps=1e-4):
         """
         Constrains the input perturbation by projecting it onto an L1 sphere
         :param y_pixels: (b,v,h,w)
@@ -338,6 +349,8 @@ class ViewmakerPix2Pix(Viewmaker):
             max_magnitude = distortion_budget
             delta = delta * max_magnitude / (avg_magnitude + eps)
         return delta
+
+
 # ---
 
 class ConvLayer(torch.nn.Module):

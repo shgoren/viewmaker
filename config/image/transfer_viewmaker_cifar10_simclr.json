@@ -14,8 +14,8 @@
 	"resnet_small": true
     },
     "pretrain_model": {
-        "exp_dir": null,
-        "checkpoint_name": "epoch=199.ckpt"
+        "exp_dir": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/pretrain_viewmaker_cifar_simclr_resnet18",
+        "checkpoint_name": "epoch=199-step=77999.ckpt"
     },
     "optim_params": {
         "batch_size": 128,
@@ -28,6 +28,6 @@
     },
     "num_epochs": 100,
     "validate": true,
-    "copy_checkpoint_freq": 5,
+    "copy_checkpoint_freq":20,
     "continue_from_checkpoint": null
 }

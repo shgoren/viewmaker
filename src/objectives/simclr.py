@@ -38,4 +38,4 @@ class SimCLRObjective(torch.nn.Module):
 
         # Witness score should be 2nd highest if correct (1st highest is the same example).
         accuracy = torch.isclose(witness_score, torch.topk(witness_norm_raw, 2, dim=-1).values[:, 1].float()).float().mean()
-        return loss, accuracy
+        return loss, accuracy, witness_score.mean(), witness_norm_raw.mean()
