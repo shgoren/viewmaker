@@ -1,0 +1,14 @@
+{
+  "ffhq64 disc":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig+disc  genweight 0.01/checkpoints/epoch=179-step=88559.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig+disc  genweight 0.01/config.json"
+  },
+  "ffhq64 vm_orig":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig/checkpoints/epoch=139-step=68879.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig/config.json"
+  },
+  "ffhq32 vm_orig":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/enc+vm_orig+disc - 3 additives b0.02/checkpoints/epoch=179-step=88559.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/enc+vm_orig+disc - 3 additives b0.02/config.json"
+  }
+}

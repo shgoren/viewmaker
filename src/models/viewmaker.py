@@ -26,7 +26,7 @@ class Viewmaker(torch.nn.Module):
     def __init__(self, num_channels=3, activation='relu',
                  clamp=True, frequency_domain=False, downsample_to=False, num_res_blocks=5,
                  additive=1, multiplicative_budget=0.25, multiplicative=0, additive_budget=0.05, tps=0, tps_budget=0.1,
-                 use_budget=True, budget_aware=False, image_dim=None, aug_proba=1):
+                 use_budget=True, budget_aware=False, image_dim=None, aug_proba=1, coop=False, coop_budget=None):
         '''Initialize the Viewmaker network.
 
         Args:
@@ -93,6 +93,13 @@ class Viewmaker(torch.nn.Module):
         else:
             self.pixel_transforms = None
 
+        if coop:
+            self.coop_net = self._full_size_output_net()
+            self.coop_budget = coop_budget or self.additive_budget
+        else:
+            self.coop_net = None
+            self.coop_budget = None
+
         if tps > 0:
             assert image_dim is not None, "image dimensions are required for tps augmentations"
 
@@ -111,6 +118,15 @@ class Viewmaker(torch.nn.Module):
         #     self.act(),
         #     ConvLayer(16, 1, kernel_size=3, stride=1),
         # )
+
+    def parameters(self, recurse=True, vm_adv=True):
+        for name, param in self.named_parameters(recurse=recurse):
+            if vm_adv:
+                if "coop" not in name:
+                    yield param
+            else:
+                if "coop" in name:
+                    yield param
 
     def _full_size_output_net(self):
         return nn.Sequential(
@@ -151,6 +167,7 @@ class Viewmaker(torch.nn.Module):
             raise ValueError(f'num_res_blocks must be in {list(range(9))}, got {num_res_blocks}.')
 
         x_noise = self.add_noise_channel(x, bound_multiplier=bound_multiplier)
+        # x_noise = x
         f = self.feature_extraction(x_noise)
         # f = self.feature_extraction(x)
 
@@ -182,9 +199,13 @@ class Viewmaker(torch.nn.Module):
         else:
             geometric_aug = None
 
+        if self.coop_net is not None:
+            coop_resid = self.coop_net(f)
+            pixel_aug.append(lambda img, p: self.add_residual(img, coop_resid, p, self.coop_budget))
+
         return pixel_aug, geometric_aug, features
 
-    def get_additive_delta(self, y_pixels, eps=1e-6):
+    def get_additive_delta(self, y_pixels, eps=1e-6, budget=None):
         """
         Constrains the input perturbation by projecting it onto an L1 sphere
         :param y_pixels: (b,v,h,w)
@@ -192,7 +213,7 @@ class Viewmaker(torch.nn.Module):
         :return:
         """
 
-        distortion_budget = self.additive_budget
+        distortion_budget = budget or self.additive_budget
         delta = torch.tanh(y_pixels)  # Project to [-1, 1]
         if self.use_budget:
             avg_magnitude = delta.abs().mean([1, 2, 3], keepdim=True)
@@ -270,8 +291,8 @@ class Viewmaker(torch.nn.Module):
         result = result * mask + x * (1 - mask)
         return result
 
-    def add_residual(self, x, residual, p=1):
-        delta = self.get_additive_delta(residual)
+    def add_residual(self, x, residual, p=1, budget=None):
+        delta = self.get_additive_delta(residual, budget=budget)
         if self.frequency_domain:
             # Compute inverse DCT from frequency domain to time domain.
             delta = dct.idct_2d(delta)

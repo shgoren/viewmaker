@@ -4,6 +4,7 @@ from torchvision import transforms
 from PIL import ImageFilter, Image
 
 from  viewmaker.src.datasets.cifar10 import CIFAR10, CIFAR10Corners
+from viewmaker.src.datasets.ffhq import FFHQ64, FFHQ32, FFHQ128
 
 from  viewmaker.src.datasets.meta_datasets.aircraft import Aircraft
 from  viewmaker.src.datasets.meta_datasets.cu_birds import CUBirds
@@ -29,6 +30,9 @@ DATASET = {
     'meta_mscoco': MSCOCO2,
     'meta_traffic_sign': TrafficSign,
     'meta_vgg_flower': VGGFlower,
+    'ffhq64': FFHQ64,
+    'ffhq32': FFHQ32,
+    'ffhq128': FFHQ128,
 }
 
 
@@ -57,7 +61,7 @@ def get_image_datasets(
 
 
 def load_image_transforms(dataset):
-    if 'cifar' in dataset:
+    if 'cifar' in dataset or 'ffhq' in dataset:
         train_transforms = transforms.ToTensor()
         test_transforms = transforms.ToTensor()
     elif dataset in ['mscoco'] or 'meta_' in dataset:

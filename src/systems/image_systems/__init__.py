@@ -3,6 +3,7 @@ from .pretrain_view_maker_system import PretrainViewMakerSystem
 from .pretrain_neutralad_view_maker_system import PretrainNeuTraLADViewMakerSystem
 from .pretrain_expert_system import PretrainExpertSystem
 from .pretrain_expert_gan_system import PretrainExpertGANSystem
+from .pretrain_view_maker_system_friendly import PretrainViewMakerSystemFriendly
 from .transfer_view_maker_system import TransferViewMakerSystem
 from .transfer_expert_system import TransferExpertSystem
 from .utils import create_dataloader

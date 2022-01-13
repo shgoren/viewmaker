@@ -3,8 +3,10 @@ import argparse
 import json
 import os
 
+import numpy as np
 import tensorflow as tf
 import torch
+import torchvision.utils
 import wandb
 from dotmap import DotMap
 
@@ -24,6 +26,7 @@ from tensorflow.keras import optimizers
 # Normalize images
 from viewmaker.src.systems.image_systems import TransferViewMakerSystem, PretrainViewMakerSystemDisc, \
     PretrainViewMakerSystem
+from viewmaker.src.systems.image_systems.utils import heatmap_of_view_effect_np
 
 
 def define_model():
@@ -77,22 +80,36 @@ def define_model():
     return model
 
 
-def load_viewmaker_from_checkpoint(viewmaker_cpkt, eval=True):
-    base_dir = "/".join(args.ckpt.split("/")[:-2])
-    config_path = os.path.join(base_dir, 'config.json')
+def load_viewmaker_from_checkpoint(viewmaker_cpkt, config_path, eval=True):
+    # base_dir = "/".join(args.ckpt.split("/")[:-2])
+    # config_path = os.path.join(base_dir, 'config.json')
+    # with open(config_path, 'r') as f:
+    #     config_json = json.load(f)
+    # config = DotMap(config_json)
+    # system = PretrainViewMakerSystem(config)
+    # checkpoint = torch.load(viewmaker_cpkt, map_location="cuda:0")
+    # system.load_state_dict(checkpoint['state_dict'], strict=False)
+    # viewmaker = system.viewmaker.eval()
+    # return viewmaker
+
+    config_path =config_path
     with open(config_path, 'r') as f:
         config_json = json.load(f)
     config = DotMap(config_json)
-    system = PretrainViewMakerSystem(config)
+
+    SystemClass = globals()[config.system]
+    system = SystemClass(config)
     checkpoint = torch.load(viewmaker_cpkt, map_location="cuda:0")
     system.load_state_dict(checkpoint['state_dict'], strict=False)
-    viewmaker = system.viewmaker.eval()
+    if eval:
+        viewmaker = system.viewmaker.eval()
     return viewmaker
 
 
 class CustomDataGenerator(ImageDataGenerator):
     def __init__(self,
                  viewmaker_cpkt=None,
+                 config_path=None,
                  **kwargs):
         '''
         Custom image data generator.
@@ -101,7 +118,7 @@ class CustomDataGenerator(ImageDataGenerator):
         super().__init__(**kwargs)
         self.viewmaker = None
         if viewmaker_cpkt is not None:
-            self.viewmaker = load_viewmaker_from_checkpoint(viewmaker_cpkt, eval=True)
+            self.viewmaker = load_viewmaker_from_checkpoint(viewmaker_cpkt, config_path, eval=True)
 
     def flow(self,
              x,
@@ -119,15 +136,20 @@ class CustomDataGenerator(ImageDataGenerator):
                                 save_prefix=save_prefix, save_format=save_format, subset=subset)
 
         def custom_flow():
-            for x, y in data_gen:
+            for i, (x, y) in enumerate(data_gen):
                 torch_tensor = torch.from_numpy(x).permute(0, 3, 1, 2)
                 with torch.no_grad():
                     if self.viewmaker is not None:
                         torch_view = self.viewmaker(torch_tensor)
                     else:
                         torch_view = torch_tensor
-                tf_fiew = torch_view.permute(0, 2, 3, 1).numpy()
-                yield (tf_fiew, y)
+                tf_view = torch_view.permute(0, 2, 3, 1).numpy()
+                if i==0 and not args.debug:
+                    grid = np.concatenate((x, tf_view, heatmap_of_view_effect_np(x,tf_view)), 1)[:10]
+                    grid = np.moveaxis(grid,0,1)
+                    grid = grid.reshape(grid.shape[0], -1, 3)
+                    wandb.log({"augmentation sample": wandb.Image(grid)})
+                yield (tf_view, y)
 
         return custom_flow()
 
@@ -138,6 +160,10 @@ def main():
         wandb.init(project='transfer_augmentations', name=args.exp_name)
 
     (x_train, y_train), (x_test, y_test) = cifar100.load_data()
+    if args.low_data:
+        len_train, len_test = len(x_train), len(x_test)
+        train_idx, test_idx = np.random.choice(range(len_train), len_train//2),    np.random.sample(range(len_test), len_test//2)
+        (x_train, y_train), (x_test, y_test) = (x_train[train_idx], y_train[train_idx]), (x_test[test_idx], y_test[test_idx])
     train_images = x_train.astype('float32') / 255
     test_images = x_test.astype('float32') / 255
 
@@ -154,9 +180,10 @@ def main():
     else:
         rotation_range = 0
         horizontal_flip = False
-    data_generator = CustomDataGenerator(viewmaker_cpkt=args.ckpt, horizontal_flip=horizontal_flip,
+    data_generator = CustomDataGenerator(viewmaker_cpkt=args.ckpt,
+                                         config_path=args.config,
+                                         horizontal_flip=horizontal_flip,
                                          rotation_range=rotation_range)
-
     data_generator.fit(X_train)
 
     # Configure the model for training
@@ -183,7 +210,9 @@ if __name__ == "__main__":
     arg_parse.add_argument("--exp_name", type=str)
     arg_parse.add_argument("--gpu_device", type=str, default='1')
     arg_parse.add_argument("--ckpt", type=str, default=None)
+    arg_parse.add_argument("--config", type=str, default=None)
     arg_parse.add_argument("--debug", action="store_true")
+    arg_parse.add_argument("--expert", action="store_true")
     arg_parse.add_argument("--expert", action="store_true")
     arg_parse.add_argument("--num_epochs", type=int, default=350)
     arg_parse.add_argument("--batch_size", type=int, default=64)

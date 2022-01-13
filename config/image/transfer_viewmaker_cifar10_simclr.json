@@ -7,24 +7,28 @@
     "seed": 1337,
     "data_loader_workers": 16,
     "data_params": {
-        "dataset": "cifar10"
+        "dataset": "ffhq64",
+        "input_size": 64
     },
     "model_params": {
 	"use_prepool": true,
 	"resnet_small": true
     },
     "pretrain_model": {
-        "exp_dir": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/pretrain_viewmaker_cifar_simclr_resnet18",
-        "checkpoint_name": "epoch=199-step=77999.ckpt"
+        "exp_dir": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig+disc  genweight 0.01",
+        "checkpoint_name": "epoch=179-step=88559.ckpt",
+        "config_dir": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig+disc  genweight 0.01",
+        "config_name": "config.json"
     },
     "optim_params": {
-        "batch_size": 128,
+        "batch_size": 10,
+
         "learning_rate": 0.01,
         "momentum": 0.9,
         "weight_decay": 0,
         "validate_freq": 1,
         "patience": 10,
-        "scheduler": "MoCoLRScheduler"
+        "no_views":false
     },
     "num_epochs": 100,
     "validate": true,

@@ -15,4 +15,5 @@ DATA_ROOTS = {
     'librispeech': 'data/librispeech',
     'voxceleb1': 'data/voxceleb1',
     'pamap2': 'data/sensor/PAMAP2_Dataset/Protocol',
+    'ffhq': 'data/ffhq'
 } 

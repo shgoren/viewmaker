@@ -193,12 +193,13 @@ class TinyP2PDiscriminator(nn.Module):
         if self.blocks == 0:
             feature_dim = 3
         else:
+            # feature_dim = self.conv_block4.out_channels
             feature_dim = self.conv_blocks[-1].out_channels
         self.final_conv = nn.Conv2d(feature_dim, 1, kernel_size=(3, 3), stride=(1, 1), padding=1)
         conv_glorot_init_keras(self.final_conv)
 
     def forward(self, x):
-        for i, conv_block in enumerate(self.conv_blocks):
+        for i, conv_block in enumerate([*self._modules.values()]):
             if i == self.blocks:
                 break
             x = conv_block(x)

@@ -7,7 +7,6 @@ from collections import Counter, OrderedDict
 from dotmap import DotMap
 from matplotlib import pyplot as plt
 
-
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self):
@@ -106,3 +105,29 @@ class delayed_linear_schedule:
             return self.ramp_up_vals[step-self.start_step]
         else:
             return self.stop_val
+
+
+def load_viewmaker_from_checkpoint(viewmaker_cpkt, config_path, eval=True):
+    # base_dir = "/".join(args.ckpt.split("/")[:-2])
+    # config_path = os.path.join(base_dir, 'config.json')
+    # with open(config_path, 'r') as f:
+    #     config_json = json.load(f)
+    # config = DotMap(config_json)
+    # system = PretrainViewMakerSystem(config)
+    # checkpoint = torch.load(viewmaker_cpkt, map_location="cuda:0")
+    # system.load_state_dict(checkpoint['state_dict'], strict=False)
+    # viewmaker = system.viewmaker.eval()
+    # return viewmaker
+
+    config_path =config_path
+    with open(config_path, 'r') as f:
+        config_json = json.load(f)
+    config = DotMap(config_json)
+
+    SystemClass = globals()[config.system]
+    system = SystemClass(config)
+    checkpoint = torch.load(viewmaker_cpkt, map_location="cuda:0")
+    system.load_state_dict(checkpoint['state_dict'], strict=False)
+    if eval:
+        viewmaker = system.viewmaker.eval()
+    return viewmaker

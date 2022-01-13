@@ -1,14 +1,16 @@
 {
     "exp_base": null,
-    "exp_name": "viewmaker",
+    "exp_name": "viewmaker-disc",
+    "project": "viewmaker",
     "system": "PretrainViewMakerSystem",
     "cuda": true,
     "gpu_device": 0,
-    "distributed_backend": "ddp",
+    "distributed_backend": "dp",
     "seed": 2,
     "data_loader_workers": 8,
     "data_params": {
-        "dataset": "cifar10"
+        "dataset": "ffhq32",
+        "input_size": 32
     },
     "model_params": {
         "out_dim": 100,
@@ -17,13 +19,13 @@
         "resnet_small": true,
         "projection_head": false,
         "noise_dim": 100,
-        "multiplicative_budget": 0.05,
-        "additive_budget": 0.05,
-        "tps_budget": 0.05,
         "num_res_blocks": 3,
         "additive": 1,
         "multiplicative": 0,
-        "tps": 0
+        "tps": 0,
+        "multiplicative_budget": 0.05,
+        "additive_budget": 0.05,
+        "tps_budget": 0.05
     },
     "loss_params": {
         "objective": "AdversarialSimCLRLoss",

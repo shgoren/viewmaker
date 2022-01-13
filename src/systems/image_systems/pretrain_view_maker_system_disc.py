@@ -12,6 +12,8 @@ from dotmap import DotMap
 from pytorch_lightning.loggers import WandbLogger
 from torch import autograd
 from torchvision.utils import make_grid
+from sklearn.linear_model import SGDClassifier
+from sklearn.dummy import DummyClassifier
 
 from viewmaker.src.datasets import datasets
 from viewmaker.src.gans.tiny_pix2pix import TinyP2PDiscriminator
@@ -20,7 +22,7 @@ from viewmaker.src.models import viewmaker
 from viewmaker.src.objectives.adversarial import AdversarialSimCLRLoss, AdversarialNCELoss
 from viewmaker.src.objectives.memory_bank import MemoryBank
 from viewmaker.src.utils import utils
-from viewmaker.src.systems.image_systems.utils import create_dataloader
+from viewmaker.src.systems.image_systems.utils import create_dataloader, heatmap_of_view_effect
 from pl_bolts.models.self_supervised import SimCLR
 
 
@@ -40,6 +42,7 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         self.t = self.config.loss_params.t
         self.adv_loss_weight = self.config.disc.vm_gen_loss_weight
         self.r1_penalty_weight = self.config.disc.r1_penalty_weight
+        self.linear_probe = None
 
         self.train_dataset, self.val_dataset = datasets.get_image_datasets(
             config.data_params.dataset,
@@ -82,7 +85,8 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         '''Create the encoder model.'''
         if self.config.model_params.resnet_small:
             # ResNet variant for smaller inputs (e.g. CIFAR-10).
-            encoder_model = resnet_small.ResNet18(self.config.model_params.out_dim)
+            encoder_model = resnet_small.ResNet18(self.config.model_params.out_dim,
+                                                  input_size=self.config.data_params.input_size or 32)
         else:
             resnet_class = getattr(
                 torchvision.models,
@@ -124,24 +128,27 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             frequency_domain=self.config.model_params.spectral or False,
             downsample_to=self.config.model_params.viewmaker_downsample or False,
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
-            use_budget=self.config.model_params.use_budget,
-            budget_aware=self.config.model_params.budget_aware,
+            use_budget=self.config.model_params.use_budget or True,
+            budget_aware=self.config.model_params.budget_aware or False,
             image_dim = (32,32),
-            multiplicative=self.config.model_params.multiplicative,
+            multiplicative=self.config.model_params.multiplicative or 0,
             multiplicative_budget=self.config.model_params.multiplicative_budget or 0.25,
-            additive=self.config.model_params.additive,
+            additive=self.config.model_params.additive or 1,
             additive_budget=self.config.model_params.additive_budget or 0.05,
-            tps=self.config.model_params.tps,
-            tps_budget=self.config.model_params.tps_budget,
+            tps=self.config.model_params.tps or 0,
+            tps_budget=self.config.model_params.tps_budget or 0.1,
+            aug_proba=self.config.model_params.aug_proba or 1,
         )
         return view_model
 
-    def view(self, imgs):
+    def view(self, imgs, with_unnormalized = False):
         if 'Expert' in self.config.system:
             raise RuntimeError('Cannot call self.view() with Expert system')
-        views_unn = self.viewmaker(imgs)
-        views = self.normalize(views_unn)
-        return views, views_unn
+        unnormalized = self.viewmaker(imgs)
+        views = self.normalize(unnormalized)
+        if with_unnormalized:
+            return views, unnormalized
+        return views
 
     def noise(self, batch_size, device):
         shape = (batch_size, self.config.model_params.noise_dim)
@@ -161,6 +168,9 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         if 'cifar' in self.config.data_params.dataset:
             mean = torch.tensor([0.491, 0.482, 0.446], device=imgs.device)
             std = torch.tensor([0.247, 0.243, 0.261], device=imgs.device)
+        elif 'ffhq' in self.config.data_params.dataset:
+            mean = torch.tensor([0.5202, 0.4252, 0.3803], device=imgs.device)
+            std = torch.tensor([0.2496, 0.2238, 0.2210], device=imgs.device)
         else:
             raise ValueError(f'Dataset normalizer for {self.config.data_params.dataset} not implemented')
         imgs = (imgs - mean[None, :, None, None]) / std[None, :, None, None]
@@ -181,8 +191,9 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             if self.config.model_params.double_viewmaker:
                 view1, view2 = self.view(img)
             else:
-                view1, unnormalized_view1 = self.view(img)
-                view2, unnormalized_view2 = self.view(img2)
+                # return unnormalized for plotting
+                view1,unnormalized_view1 = self.view(img,True)
+                view2, unnormalized_view2 = self.view(img2, True)
             emb_dict = {
                 'indices': indices,
                 'view1_embs': self.model(view1),
@@ -191,9 +202,10 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             }
             if self.disc is not None:
                 img.requires_grad = True
+                self.disc = self.disc.to(self.device)
                 emb_dict["real_score"] = self.disc(self.normalize(img))
                 emb_dict["fake_score"] = torch.cat([self.disc(view1), self.disc(view2)], dim=0)
-                emb_dict['disc_r1_penalty'] = 0
+                emb_dict['disc_r1_penalty'] = 0.0
                 if self.disc.wgan:
                     try:
                         emb_dict["disc_r1_penalty"] = self.disc.r1_penalty(emb_dict["real_score"], img)
@@ -204,11 +216,11 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         else:
             raise ValueError(f'Unimplemented loss_name {self.loss_name}.')
 
-        if self.global_step % 200 == 0:
+        if self.global_step % 200 == 0 and self.device.index==0:
             # Log some example views.
             # row of images, row of diff, row of view
-            view1_diff = 1 - (unnormalized_view1[:10] - img[:10])
-            view2_diff = 1 - (unnormalized_view2[:10] - img[:10])
+            view1_diff = heatmap_of_view_effect(unnormalized_view1[:10], img[:10])
+            view2_diff = heatmap_of_view_effect(unnormalized_view2[:10], img[:10])
             grid = make_grid(torch.cat([img[:10], unnormalized_view1[:10], view1_diff]), nrow=10)
             grid = torch.clamp(torchvision.transforms.Resize(512)(grid), 0, 1)
             view1_view2_grid = make_grid(torch.cat([view1_diff, view2_diff]), nrow=10)
@@ -304,6 +316,8 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         num_correct = torch.sum(neighbor_labels.cpu() == labels.cpu()).item()
         return num_correct, batch_size
 
+
+
     def training_step(self, batch, batch_idx, optimizer_idx):
         emb_dict = self.forward(batch)
         emb_dict['optimizer_idx'] = torch.tensor(optimizer_idx, device=self.device)
@@ -317,10 +331,10 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
 
         # assuming they fixed taht in new versions
         # # Handle Tensor (dp) and int (ddp) cases
-        # if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
-        optimizer_idx = emb_dict['optimizer_idx']
-        # else:
-        #     optimizer_idx = emb_dict['optimizer_idx'][0]
+        if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
+            optimizer_idx = emb_dict['optimizer_idx']
+        else:
+            optimizer_idx = emb_dict['optimizer_idx'][0]
 
         if optimizer_idx == 0:
             metrics = {
@@ -342,9 +356,9 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         elif optimizer_idx == 2:
             metrics = {
                 'disc_acc': losses['disc_acc'],
-                'disc_loss': losses['disc_loss'],
-                'disc_r1_penalty': losses['disc_r1_penalty']}
-            loss = losses['disc_loss'] + self.r1_penalty_weight * losses['disc_r1_penalty']
+                'disc_loss': losses['disc_loss'].mean(), # mean is for DataParallel
+                'disc_r1_penalty': losses['disc_r1_penalty'].mean()}
+            loss = losses['disc_loss'] + self.r1_penalty_weight * losses['disc_r1_penalty'].mean() # mean is for DataParallel
 
         self.log_dict(metrics)
         return loss
@@ -396,6 +410,12 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
                                            train=False)
 
         num_correct, batch_size = self.get_nearest_neighbor_label(img_embs, labels)
+
+        if self.linear_probe is None:
+            self.train_linear_probe()
+        probe_score = self.linear_probe.score(img_embs.detach().cpu().numpy(), labels.cpu().numpy())
+        probe_score = torch.Tensor([probe_score]).to(self.device)
+
         output = OrderedDict({
             'val_encoder_loss': losses['encoder_loss'],
             'val_view_maker_loss': losses['view_maker_loss'],
@@ -407,10 +427,21 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
             "val_negative_sim": losses["negative_sim"],
             'val_zero_knn_correct': torch.tensor(num_correct, dtype=float, device=self.device),
             'val_num_total': torch.tensor(batch_size, dtype=float, device=self.device),
+            'val_linear_probe_score': probe_score,
         })
         return output
 
+    def train_linear_probe(self):
+        train_X, train_y = self.memory_bank._bank.cpu().numpy(), self.train_ordered_labels
+        if len(np.unique(train_y)) > 1:
+            self.linear_probe = SGDClassifier(loss="log")
+        else:
+            self.linear_probe = DummyClassifier()
+        self.linear_probe.fit(train_X, train_y)
+
     def validation_epoch_end(self, outputs):
+        self.linear_probe = None
+
         metrics = {}
         for key in outputs[0].keys():
             try:

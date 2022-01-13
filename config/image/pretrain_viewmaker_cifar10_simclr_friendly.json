@@ -2,18 +2,16 @@
     "exp_base": null,
     "exp_name": "viewmaker-disc",
     "project": "viewmaker",
-    "system": "PretrainViewMakerSystemDisc",
+    "system": "PretrainViewMakerSystemFriendly",
     "cuda": true,
     "gpu_device": 0,
-    "distributed_backend": "dp",
+    "distributed_backend": null,
     "seed": 2,
     "data_loader_workers": 8,
     "data_params": {
-        "dataset": "ffhq64",
-        "input_size": 64
+        "dataset": "cifar10"
     },
     "model_params": {
-        "viewmaker_learning_rate": 0.001,
         "out_dim": 100,
         "resnet": true,
         "resnet_version": "resnet18",
@@ -21,24 +19,13 @@
         "projection_head": false,
         "noise_dim": 100,
         "num_res_blocks": 3,
-        "use_budget": true,
-        "budget_sched": null,
-        "budget_aware": false,
-        "viewmaker_backbone": "Viewmaker",
         "additive": 1,
-        "additive_budget": 0.05,
         "multiplicative": 0,
-        "multiplicative_budget": 0.04,
         "tps": 0,
-        "tps_budget": 0.1
-    },
-    "disc": {
-        "dis_skip_steps": 0,
-        "vm_gen_loss_weight": 0.01,
-        "r1_penalty_weight": 0,
-        "conv_blocks": 4,
-        "wgan": false,
-        "gan_warmup": 0
+        "multiplicative_budget": 0.05,
+        "additive_budget": 0.05,
+        "tps_budget": 0.05,
+        "coop_budget": 0.2
     },
     "loss_params": {
         "objective": "AdversarialSimCLRLoss",
@@ -48,7 +35,6 @@
     "optim_params": {
         "batch_size": 128,
         "learning_rate": 0.03,
-        "disc_learning_rate": 1e-4,
         "momentum": 0.9,
         "weight_decay": 1e-4,
         "validate_freq": 1,
@@ -56,7 +42,6 @@
         "num_view_update": 1,
         "viewmaker_optim": "adam"
     },
-    "discriminator": true,
     "num_epochs": 200,
     "validate": true,
     "copy_checkpoint_freq": 20,

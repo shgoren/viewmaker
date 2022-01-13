@@ -16,7 +16,8 @@ SYSTEM = {
     'PretrainExpertSystem': image_systems.PretrainExpertSystem,
     'TransferViewMakerSystem': image_systems.TransferViewMakerSystem,
     'TransferExpertSystem': image_systems.TransferExpertSystem,
-    'PretrainExpertGANSystem': image_systems.PretrainExpertGANSystem
+    'PretrainExpertGANSystem': image_systems.PretrainExpertGANSystem,
+    "PretrainViewMakerSystemFriendly": image_systems.PretrainViewMakerSystemFriendly
 }
 
 
@@ -71,16 +72,17 @@ def run(args):
         wandblogger.log_hyperparams(config)
     else:
         wandblogger = TensorBoardLogger(config.exp_dir)
+
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
-        gpus=len(args.gpu_device),
+        gpus=len(args.gpu_device.replace(",","")),
          # 'ddp' is usually faster, but we use 'dp' so the negative samples 
          # for the whole batch are used for the SimCLR loss
-        # distributed_backend=config.distributed_backend or 'dp',
+        accelerator=config.distributed_backend or 'dp',
         max_epochs=config.num_epochs,
         min_epochs=config.num_epochs,
         checkpoint_callback=True,
-        profiler=args.profiler,
+        profiler="simple" if args.profiler else None,
         precision=config.optim_params.precision or 32,
         callbacks=callbacks,
         val_check_interval=config.val_check_interval or 1.0,

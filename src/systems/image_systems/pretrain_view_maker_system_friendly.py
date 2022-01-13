@@ -12,8 +12,6 @@ import wandb
 from torch import autograd
 from torchvision import models
 from torchvision.utils import make_grid
-from sklearn.linear_model import SGDClassifier
-from sklearn.dummy import DummyClassifier
 
 from viewmaker.src.datasets import datasets
 from viewmaker.src.models import resnet_small
@@ -21,10 +19,10 @@ from viewmaker.src.models import viewmaker
 from viewmaker.src.objectives.adversarial import AdversarialSimCLRLoss, AdversarialNCELoss
 from viewmaker.src.objectives.memory_bank import MemoryBank
 from viewmaker.src.utils import utils
-from ..image_systems.utils import create_dataloader, heatmap_of_view_effect
+from ..image_systems.utils import create_dataloader
 
 
-class PretrainViewMakerSystem(pl.LightningModule):
+class PretrainViewMakerSystemFriendly(pl.LightningModule):
     '''Pytorch Lightning System for self-supervised pretraining
     with adversarially generated views.
     '''
@@ -35,7 +33,6 @@ class PretrainViewMakerSystem(pl.LightningModule):
         self.batch_size = config.optim_params.batch_size
         self.loss_name = self.config.loss_params.objective
         self.t = self.config.loss_params.t
-        self.linear_probe = None
 
         self.train_dataset, self.val_dataset = datasets.get_image_datasets(
             config.data_params.dataset,
@@ -46,8 +43,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
         self.train_ordered_labels = np.array(train_labels)
 
         self.budget_sched = config.model_params.budget_sched or False
-        if self.budget_sched:
-            self.budget_steps = utils.delayed_linear_schedule(0.05, self.config.model_params.additive_budget, 2, 100)
+        self.budget_steps = np.linspace(0.05, 1, 180)
 
         if config.model_params.pretrained or False:
             print("loading pretrained encoder")
@@ -64,19 +60,23 @@ class PretrainViewMakerSystem(pl.LightningModule):
 
 
     def get_budget(self):
-        if self.budget_sched == "random_normal":
-            curr_mean = self.budget_steps[self.current_epoch]
-            return max(np.random.normal(curr_mean, curr_mean*0.6), 0)
+        if not self.budget_sched:
+            return self.distortion_budget
 
-        elif self.budget_sched == "linear":
-            return self.budget_steps[self.current_epoch]
+        idx = self.current_epoch
+        # before budget sched start
+        if idx < 20:
+            return self.budget_steps[0]
+        if idx < len(self.budget_steps):
+            return self.budget_steps[idx]
+        else:
+            return self.budget_steps[-1]
 
     def create_encoder(self):
         '''Create the encoder model.'''
         if self.config.model_params.resnet_small:
             # ResNet variant for smaller inputs (e.g. CIFAR-10).
-            encoder_model = resnet_small.ResNet18(self.config.model_params.out_dim,
-                                                  input_size=self.config.data_params.input_size or 32)
+            encoder_model = resnet_small.ResNet18(self.config.model_params.out_dim)
         else:
             resnet_class = getattr(
                 torchvision.models,
@@ -103,16 +103,14 @@ class PretrainViewMakerSystem(pl.LightningModule):
         if not isinstance(self.config.model_params.view_bound_magnitude, DotMap):
             self.config.model_params.additive_budget = self.config.model_params.view_bound_magnitude
 
-        VMClass = viewmaker.VIEWMAKERS[self.config.model_params.viewmaker_backbone or 'Viewmaker']
-        view_model = VMClass(
+        view_model = viewmaker.Viewmaker(
             num_channels=self.train_dataset.NUM_CHANNELS,
             activation=self.config.model_params.generator_activation or 'relu',
-            clamp=self.config.model_params.clamp_views or True,
+            clamp=self.config.model_params.clamp_views,
             frequency_domain=self.config.model_params.spectral or False,
             downsample_to=self.config.model_params.viewmaker_downsample or False,
             num_res_blocks=self.config.model_params.num_res_blocks or 5,
-            use_budget=self.config.model_params.use_budget or True,
-            budget_aware=self.config.model_params.budget_aware or False,
+            use_budget=True,
             image_dim = (32,32),
             multiplicative=self.config.model_params.multiplicative or 0,
             multiplicative_budget=self.config.model_params.multiplicative_budget or 0.25,
@@ -121,6 +119,9 @@ class PretrainViewMakerSystem(pl.LightningModule):
             tps=self.config.model_params.tps or 0,
             tps_budget=self.config.model_params.tps_budget or 0.1,
             aug_proba=self.config.model_params.aug_proba or 1,
+            budget_aware=self.config.model_params.budget_aware or False,
+            coop=True,
+            coop_budget=self.config.model_params.coop_budget or None
         )
         return view_model
 
@@ -151,9 +152,6 @@ class PretrainViewMakerSystem(pl.LightningModule):
         if 'cifar' in self.config.data_params.dataset:
             mean = torch.tensor([0.491, 0.482, 0.446], device=imgs.device)
             std = torch.tensor([0.247, 0.243, 0.261], device=imgs.device)
-        elif 'ffhq' in self.config.data_params.dataset:
-            mean = torch.tensor([0.5202, 0.4252, 0.3803], device=imgs.device)
-            std = torch.tensor([0.2496, 0.2238, 0.2210], device=imgs.device)
         else:
             raise ValueError(f'Dataset normalizer for {self.config.data_params.dataset} not implemented')
         imgs = (imgs - mean[None, :, None, None]) / std[None, :, None, None]
@@ -185,11 +183,11 @@ class PretrainViewMakerSystem(pl.LightningModule):
         else:
             raise ValueError(f'Unimplemented loss_name {self.loss_name}.')
 
-        if self.global_step % 200 == 0  and self.device.index==0:
+        if self.global_step % 200 == 0:
             # Log some example views.
             # row of images, row of diff, row of view
-            view1_diff = heatmap_of_view_effect(unnormalized_view1[:10], img[:10])
-            view2_diff = heatmap_of_view_effect(unnormalized_view2[:10], img[:10])
+            view1_diff = 1 - (unnormalized_view1[:10] - img[:10])
+            view2_diff = 1 - (unnormalized_view2[:10] - img[:10])
             grid = make_grid(torch.cat([img[:10],
                                         # unnormalized_view1[:10]/(img[:10]+1e-6),
                                         unnormalized_view1[:10],
@@ -275,14 +273,14 @@ class PretrainViewMakerSystem(pl.LightningModule):
         encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim = self.get_losses_for_batch(emb_dict, train=True)
 
         if self.budget_sched:
-            self.viewmaker.additive_budget = self.get_budget()
+            self.viewmaker.distortion_budget = self.get_budget()
 
         # assuming they fixed taht in new versions
         # # Handle Tensor (dp) and int (ddp) cases
-        if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
-            optimizer_idx = emb_dict['optimizer_idx']
-        else:
-            optimizer_idx = emb_dict['optimizer_idx'][0]
+        # if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
+        optimizer_idx = emb_dict['optimizer_idx']
+        # else:
+        #     optimizer_idx = emb_dict['optimizer_idx'][0]
 
         if optimizer_idx == 0:
             metrics = {
@@ -295,7 +293,11 @@ class PretrainViewMakerSystem(pl.LightningModule):
                 'view_maker_loss': view_maker_loss,
             }
             loss = view_maker_loss
-
+        elif optimizer_idx == 2:
+            metrics = {
+                'view_maker_coop_loss': -view_maker_loss,
+            }
+            loss = -view_maker_loss
         self.log_dict(metrics)
         return loss
 
@@ -326,6 +328,15 @@ class PretrainViewMakerSystem(pl.LightningModule):
                 super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
                                        using_native_amp, using_lbfgs)
 
+        if optimizer_idx == 2:
+            if freeze_after_epoch:
+                # freeze viewmaker after a certain number of epochs
+                # call the closure by itself to run `training_step` + `backward` without an optimizer step
+                optimizer_closure()
+            else:
+                super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, optimizer_closure, on_tpu,
+                                       using_native_amp, using_lbfgs)
+
     def validation_step(self, batch, batch_idx):
         emb_dict = self.forward(batch, train=False)
         if 'img_embs' in emb_dict:
@@ -338,10 +349,10 @@ class PretrainViewMakerSystem(pl.LightningModule):
             emb_dict, train=False)
         num_correct, batch_size = self.get_nearest_neighbor_label(img_embs, labels)
 
-        if self.linear_probe is None:
+        if batch_idx==0:
             self.train_linear_probe()
         probe_score = self.linear_probe.score(img_embs.detach().cpu().numpy(), labels.cpu().numpy())
-        probe_score = torch.Tensor([probe_score]).to(self.device)
+        probe_score = torch.Tensor([probe_score])
 
         output = OrderedDict({
             'val_encoder_loss': encoder_loss,
@@ -355,19 +366,14 @@ class PretrainViewMakerSystem(pl.LightningModule):
         return output
 
     def train_linear_probe(self):
+        from sklearn.linear_model import LogisticRegression
         train_X, train_y = self.memory_bank._bank.cpu().numpy(), self.train_ordered_labels
-        if len(np.unique(train_y)) > 1:
-            self.linear_probe = SGDClassifier(loss="log")
-        else:
-            self.linear_probe = DummyClassifier()
+        self.linear_probe = LogisticRegression(solver="liblinear")
         self.linear_probe.fit(train_X, train_y)
 
 
 
-
     def validation_epoch_end(self, outputs):
-        self.linear_probe = None
-
         metrics = {}
         for key in outputs[0].keys():
             try:
@@ -401,7 +407,9 @@ class PretrainViewMakerSystem(pl.LightningModule):
         view_parameters = self.viewmaker.parameters()
         if view_optim_name == 'adam':
             view_optim = torch.optim.Adam(
-                view_parameters, lr=self.config.optim_params.viewmaker_learning_rate or 0.001)
+                self.viewmaker.parameters(vm_adv=True), lr=self.config.optim_params.viewmaker_learning_rate or 0.001)
+            view_optim_coop = torch.optim.Adam(
+                self.viewmaker.parameters(vm_adv=False), lr=self.config.optim_params.viewmaker_learning_rate or 0.001)
         elif not view_optim_name or view_optim_name == 'sgd':
             view_optim = torch.optim.SGD(
                 view_parameters,
@@ -412,7 +420,7 @@ class PretrainViewMakerSystem(pl.LightningModule):
         else:
             raise ValueError(f'Optimizer {view_optim_name} not implemented')
 
-        enc_list = [encoder_optim, view_optim]
+        enc_list = [encoder_optim, view_optim, view_optim_coop]
 
         return enc_list, []
 

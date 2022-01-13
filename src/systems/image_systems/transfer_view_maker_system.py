@@ -3,18 +3,22 @@ import random
 from collections import OrderedDict
 
 import pytorch_lightning as pl
+from pytorch_lightning.loggers.wandb import WandbLogger
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_dct as dct
 from dotmap import DotMap
 from sklearn.metrics import f1_score
+from torchvision.utils import make_grid
+import wandb
 
 from viewmaker.src.datasets import datasets
 from viewmaker.src.models.transfer import LogisticRegression
 from viewmaker.src.utils import utils
-from . import PretrainViewMakerSystem, PretrainViewMakerSystemDisc
-from ..image_systems.utils import create_dataloader
+from ..image_systems.utils import create_dataloader, heatmap_of_view_effect
+from ..image_systems import PretrainViewMakerSystem, PretrainViewMakerSystemDisc
+
 
 class TransferViewMakerSystem(pl.LightningModule):
     '''Pytorch Lightning System for linear evaluation of self-supervised
@@ -56,9 +60,11 @@ class TransferViewMakerSystem(pl.LightningModule):
 
     def load_pretrained_model(self):
         base_dir = self.config.pretrain_model.exp_dir
+        config_dir = self.config.pretrain_model.config_dir
         checkpoint_name = self.config.pretrain_model.checkpoint_name
+        config_name = self.config.pretrain_model.config_name if self.config.pretrain_model.config_name else 'config.json'
 
-        config_path = os.path.join(base_dir, 'config.json')
+        config_path = os.path.join(config_dir, config_name)
         config_json = utils.load_json(config_path)
         config = DotMap(config_json)
 
@@ -88,6 +94,7 @@ class TransferViewMakerSystem(pl.LightningModule):
         return noise
 
     def forward(self, img, valid=False):
+        original_img = img
         batch_size = img.size(0)
         if self.pretrain_config.data_params.spectral_domain:
             img = self.system.normalize(img)
@@ -98,6 +105,26 @@ class TransferViewMakerSystem(pl.LightningModule):
             if type(img) == tuple:
                 idx = random.randint(0, 1)
                 img = img[idx]
+
+        ############################### log images ###########################
+        logging_steps = 20
+        if isinstance(self.logger, WandbLogger):
+            logging_steps = 200
+
+        if self.global_step % logging_steps == 0:
+            amount_images = 10
+            grid = make_grid(torch.cat([original_img[:amount_images], img[:amount_images],
+                                        heatmap_of_view_effect(original_img[:amount_images], img[:amount_images])],
+                                       dim=0), nrow=amount_images)
+            grid = torch.clamp(grid, 0, 1.0)
+            if isinstance(self.logger, WandbLogger):
+                wandb.log(
+                    {"db_examples": wandb.Image(grid, caption=f"Epoch: {self.current_epoch}, Step {self.global_step}")})
+            else:
+                self.logger.experiment.add_image('db_examples', grid, self.global_step)
+
+        ############################### log images END ###########################
+
         if 'Expert' not in self.pretrain_config.system and not self.pretrain_config.data_params.spectral_domain:
             img = self.system.normalize(img)
         if self.pretrain_config.model_params.resnet_small:
@@ -113,8 +140,7 @@ class TransferViewMakerSystem(pl.LightningModule):
         _, img, _, _, label = batch
         logits = self.forward(img, valid)
         if self.train_dataset.MULTI_LABEL:
-            return F.binary_cross_entropy(torch.sigmoid(logits).view(-1),
-                                          label.view(-1).float())
+            return F.binary_cross_entropy(torch.sigmoid(logits).view(-1), label.view(-1).float())
         else:
             return F.cross_entropy(logits, label)
 
@@ -145,11 +171,12 @@ class TransferViewMakerSystem(pl.LightningModule):
             else:
                 num_correct, num_total = self.get_accuracies_for_batch(batch)
             metrics = {
-                'train_loss': loss,
-                'train_num_correct': torch.tensor(num_correct, dtype=float, device=self.device),
-                'train_num_total': torch.tensor(num_total, dtype=float, device=self.device),
-                'train_acc': torch.tensor(num_correct / float(num_total), dtype=float, device=self.device)
+                'train_loss': loss.detach(),
+                'train_num_correct': torch.tensor(num_correct, dtype=float, device=self.device).detach(),
+                'train_num_total': torch.tensor(num_total, dtype=float, device=self.device).detach(),
+                'train_acc': torch.tensor(num_correct / float(num_total), dtype=float, device=self.device).detach()
             }
+        self.log_dict(metrics)
         return {'loss': loss, 'log': metrics}
 
     def validation_step(self, batch, batch_idx):
@@ -203,6 +230,7 @@ class TransferViewMakerSystem(pl.LightningModule):
             val_f1 = val_f1 / float(num_class)
             metrics['val_f1'] = val_f1
             progress_bar['f1'] = val_f1
+            self.log_dict(metrics)
             return {'val_loss': metrics['val_loss'],
                     'log': metrics,
                     'val_acc': val_acc,
@@ -214,6 +242,7 @@ class TransferViewMakerSystem(pl.LightningModule):
             val_acc = num_correct / float(num_total)
             metrics['val_acc'] = val_acc
             progress_bar = {'acc': val_acc}
+            self.log_dict(metrics)
             return {'val_loss': metrics['val_loss'],
                     'log': metrics,
                     'val_acc': val_acc,
