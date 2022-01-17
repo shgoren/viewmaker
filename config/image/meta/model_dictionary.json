@@ -1,0 +1,26 @@
+{
+  "ffhq64_disc":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig+disc  genweight 0.01/checkpoints/epoch=179-step=88559.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig+disc  genweight 0.01/config.json"
+  },
+  "ffhq64_vm_orig":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig/checkpoints/epoch=139-step=68879.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq64 - enc+vm_orig/config.json"
+  },
+  "ffhq32_disc":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/enc+vm_orig+disc - 3 additives b0.02/checkpoints/epoch=179-step=88559.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/enc+vm_orig+disc - 3 additives b0.02/config.json"
+  },
+  "ffhq32_vm_orig":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq32 - enc+vm_orig+disc  genweight 0.01/checkpoints/epoch=159-step=78719.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/ffhq32 - enc+vm_orig+disc  genweight 0.01/config.json"
+  },
+  "cifar10_disc":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/enc+vm_orig+disc - 10 epoch only disc - random budget aware m0.05 smaller std/checkpoints/epoch=199-step=77999.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/enc+vm_orig+disc - 10 epoch only disc - random budget aware m0.05 smaller std/config.json"
+  },
+  "cifar10_vm_orig":{
+    "ckpt": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/pretrain_viewmaker_cifar_simclr_resnet18/checkpoints/epoch=199-step=77999-v1.ckpt",
+    "config": "/disk2/shahaf/Apple/viewmaker/experiments/experiments/pretrain_viewmaker_cifar_simclr_resnet18/config.json"
+  }
+}

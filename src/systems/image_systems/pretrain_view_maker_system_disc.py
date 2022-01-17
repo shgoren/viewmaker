@@ -43,7 +43,10 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         self.adv_loss_weight = self.config.disc.vm_gen_loss_weight
         self.r1_penalty_weight = self.config.disc.r1_penalty_weight
         self.linear_probe = None
-
+        if not isinstance(self.config.model_params.view_bound_magnitude, DotMap):
+            self.config.model_params.additive_budget = self.config.model_params.view_bound_magnitude
+            self.config.model_params.multiplicative_budget = self.config.model_params.view_bound_magnitude
+            self.config.model_params.tps_budget = self.config.model_params.view_bound_magnitude
         self.train_dataset, self.val_dataset = datasets.get_image_datasets(
             config.data_params.dataset,
             config.data_params.default_augmentations or 'none',
@@ -117,9 +120,6 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         return TinyP2PDiscriminator(wgan=self.config.disc.wgan, blocks_num=self.config.disc.conv_blocks)
 
     def create_viewmaker(self):
-        assert isinstance(self.config.model_params.view_bound_magnitude, DotMap),\
-            "view_bound_magnitude parameter is no longer in use, please provider type specific budget"
-
         VMClass = viewmaker.VIEWMAKERS[self.config.model_params.viewmaker_backbone or 'Viewmaker']
         view_model = VMClass(
             num_channels=self.train_dataset.NUM_CHANNELS,
