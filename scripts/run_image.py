@@ -1,11 +1,13 @@
 import os
-from viewmaker.src.systems import image_systems
+from viewmaker.src.systems import image_systems,PretrainViewMakerSystemDABS
 from viewmaker.src.utils.callbacks import MoCoLRScheduler
 from viewmaker.src.utils.setup import process_config
 import random, torch, numpy
 
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger,TensorBoardLogger
+from dabs.src.datasets.catalog import MULTILABEL_DATASETS, PRETRAINING_DATASETS, UNLABELED_DATASETS
+
 
 torch.backends.cudnn.benchmark = True
 
@@ -17,7 +19,8 @@ SYSTEM = {
     'TransferViewMakerSystem': image_systems.TransferViewMakerSystem,
     'TransferExpertSystem': image_systems.TransferExpertSystem,
     'PretrainExpertGANSystem': image_systems.PretrainExpertGANSystem,
-    "PretrainViewMakerSystemFriendly": image_systems.PretrainViewMakerSystemFriendly
+    "PretrainViewMakerSystemFriendly": image_systems.PretrainViewMakerSystemFriendly,
+    "PretrainViewMakerSystemDABS": PretrainViewMakerSystemDABS,
 }
 
 
@@ -67,15 +70,14 @@ def run(args):
     callbacks.append(ckpt_callback)
 
     if not args.debug:
-        wandblogger = WandbLogger(project=config.project, name=config.exp_name, # ,entity="shafir"
-                                  )
+        wandblogger = WandbLogger(project=config.project, name=config.exp_name ,entity="shafir")
         wandblogger.log_hyperparams(config)
     else:
         wandblogger = TensorBoardLogger(config.exp_dir)
 
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
-        gpus=len(args.gpu_device.replace(",","")),
+        gpus=len(args.gpu_device.split(",")),
          # 'ddp' is usually faster, but we use 'dp' so the negative samples 
          # for the whole batch are used for the SimCLR loss
         accelerator=config.distributed_backend or 'dp',
@@ -88,7 +90,7 @@ def run(args):
         val_check_interval=config.val_check_interval or 1.0,
         limit_val_batches=config.limit_val_batches or 1.0,
         logger=wandblogger,
-        log_every_n_steps=50
+        log_every_n_steps=20
     )
     trainer.fit(system, ckpt_path=args.ckpt or config.continue_from_checkpoint)
 
