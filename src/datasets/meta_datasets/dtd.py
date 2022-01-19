@@ -19,6 +19,7 @@ class DTD(data.Dataset):
     MULTI_LABEL = False
     NUM_CHANNELS = 3
 
+
     def __init__(self, root=DATA_ROOTS['meta_dtd'], train=True, image_transforms=None):
         super().__init__()
         self.dataset = BaseDTD(
@@ -43,6 +44,9 @@ class DTD(data.Dataset):
 
 
 class BaseDTD(data.Dataset):
+
+    MEAN = [0.5273, 0.4703, 0.4235]
+    STD = [0.1650, 0.1658, 0.1622]
 
     def __init__(self, root=DATA_ROOTS['meta_dtd'], train=True, image_transforms=None):
         super().__init__()
@@ -99,3 +103,17 @@ class BaseDTD(data.Dataset):
             image = self.image_transforms(image)
 
         return index, image, label
+
+    @staticmethod
+    def normalize(imgs):
+        mean = torch.tensor(BaseDTD.MEAN, device=imgs.device)
+        std = torch.tensor(BaseDTD.STD, device=imgs.device)
+        imgs = (imgs - mean[None, :, None, None]) / std[None, :, None, None]
+        return imgs
+
+    @staticmethod
+    def unnormalize(imgs):
+        mean = torch.tensor(BaseDTD.MEAN, device=imgs.device)
+        std = torch.tensor(BaseDTD.STD, device=imgs.device)
+        imgs = (imgs * std[None, :, None, None]) + mean[None, :, None, None]
+        return imgs

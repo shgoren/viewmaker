@@ -9,23 +9,20 @@
     "seed": 2,
     "data_loader_workers": 8,
     "data_root": "/disk2/ofirb/dabs/data",
-    "data_params": {
-        "dataset": "pamap2",
-        "input_size": 32
-    },
+    "dataset": "chexpert",
     "model_params": {
-        "out_dim": 100,
+        "out_dim": 128,
         "resnet": true,
-        "resnet_version": "resnet18",
-        "resnet_small": true,
-        "projection_head": false,
+        "resnet_version": "resnet50",
+        "resnet_small": false,
+        "projection_head": true,
         "noise_dim": 100,
         "num_res_blocks": 3,
         "additive": 1,
         "multiplicative": 0,
         "tps": 0,
         "multiplicative_budget": 0.05,
-        "additive_budget": 0.02,
+        "additive_budget": 0.1,
         "tps_budget": 0.05,
         "budget_aware": true
     },
@@ -35,7 +32,7 @@
         "t": 0.07
     },
     "optim_params": {
-        "batch_size": 128,
+        "batch_size": 14,
         "learning_rate": 0.03,
         "momentum": 0.9,
         "weight_decay": 1e-4,
@@ -47,5 +44,6 @@
     "num_epochs": 200,
     "validate": true,
     "copy_checkpoint_freq": 20,
-    "continue_from_checkpoint": null
+    "continue_from_checkpoint": null,
+    "val_check_interval": 300
 }

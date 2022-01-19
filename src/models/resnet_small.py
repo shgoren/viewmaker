@@ -62,7 +62,8 @@ class ResNet(nn.Module):
 
     def __init__(self, block, num_blocks, num_classes=10, num_channels=3, input_size=32):
         super(ResNet, self).__init__()
-        assert input_size in [32, 64]
+        # assert input_size in [32, 64]
+        assert input_size % 32 == 0, "input_size must be a multiple of 32"
         self.in_planes = 64
         self.num_channels = num_channels
 
@@ -73,7 +74,7 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
         #                                      \/ No idea why is this part here \/
-        fc_input_size = 512 * block.expansion * (4 if input_size == 64 else 1)
+        fc_input_size = 512 * block.expansion * ((input_size//32)**2)
         # fc_input_size = 512 * block.expansion
         self.fc = nn.Linear(fc_input_size, num_classes)
 

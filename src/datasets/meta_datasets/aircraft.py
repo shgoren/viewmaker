@@ -19,6 +19,7 @@ class Aircraft(data.Dataset):
     MULTI_LABEL = False
     NUM_CHANNELS = 3
 
+
     def __init__(self, root=DATA_ROOTS['meta_aircraft'], train=True, image_transforms=None, seed=42):
         super().__init__()
         self.dataset = BaseAircraft(
@@ -44,6 +45,9 @@ class Aircraft(data.Dataset):
 
 
 class BaseAircraft(data.Dataset):
+
+    MEAN = [0.4904, 0.5140, 0.5357]
+    STD = [0.1937, 0.1898, 0.2042]
 
     def __init__(self, root=DATA_ROOTS['meta_aircraft'], train=True, image_transforms=None, seed=42):
         super().__init__()
@@ -117,4 +121,18 @@ class BaseAircraft(data.Dataset):
             image = self.image_transforms(image)
 
         return index, image, label
+
+    @staticmethod
+    def normalize(imgs):
+        mean = torch.tensor(BaseAircraft.MEAN, device=imgs.device)
+        std = torch.tensor(BaseAircraft.STD, device=imgs.device)
+        imgs = (imgs - mean[None, :, None, None]) / std[None, :, None, None]
+        return imgs
+
+    @staticmethod
+    def unnormalize(imgs):
+        mean = torch.tensor(BaseAircraft.MEAN, device=imgs.device)
+        std = torch.tensor(BaseAircraft.STD, device=imgs.device)
+        imgs = (imgs * std[None, :, None, None]) + mean[None, :, None, None]
+        return imgs
 

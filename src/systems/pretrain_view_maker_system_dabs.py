@@ -32,7 +32,8 @@ class PretrainViewMakerSystemDABS(pl.LightningModule):
     with adversarially generated views.
     '''
 
-    def __init__(self, config):
+    def __init__(
+            self, config):
         super().__init__()
         self.config = config
         self.batch_size = config.optim_params.batch_size
@@ -40,7 +41,7 @@ class PretrainViewMakerSystemDABS(pl.LightningModule):
         self.t = self.config.loss_params.t
         self.linear_probe = None
 
-        self.dataset = DATASET_DICT[config.data_params.dataset]
+        self.dataset = DATASET_DICT[config.dataset]
         
         # Used for computing knn validation accuracy
         # train_labels = self.train_dataset.dataset.targets
@@ -110,7 +111,7 @@ class PretrainViewMakerSystemDABS(pl.LightningModule):
         if self.config.model_params.resnet_small:
             # ResNet variant for smaller inputs (e.g. CIFAR-10).
             encoder_model = resnet_small.ResNet18(self.config.model_params.out_dim,
-                                                  input_size=self.config.data_params.input_size or 32)
+                                                  input_size=self.config.train_dataset.INPUT_SIZE[0])
         else:
             resnet_class = getattr(
                 torchvision.models,
@@ -120,6 +121,12 @@ class PretrainViewMakerSystemDABS(pl.LightningModule):
                 pretrained=False,
                 num_classes=self.config.model_params.out_dim,
             )
+            encoder_model.conv1 = nn.Conv2d(in_channels=self.train_dataset.IN_CHANNELS,
+                                            out_channels=encoder_model.conv1.out_channels,
+                                            kernel_size=encoder_model.conv1.kernel_size,
+                                            stride=encoder_model.conv1.stride,
+                                            padding=encoder_model.conv1.padding,
+                                            bias=False)
         if self.config.model_params.projection_head:
             mlp_dim = encoder_model.fc.weight.size(1)
             encoder_model.fc = nn.Sequential(
@@ -158,10 +165,10 @@ class PretrainViewMakerSystemDABS(pl.LightningModule):
         )
         return view_model
 
-    def view(self, imgs, with_unnormalized = False , budget_multiplier=1):
+    def view(self, imgs, with_unnormalized = False):
         if 'Expert' in self.config.system:
             raise RuntimeError('Cannot call self.view() with Expert system')
-        unnormalized = self.viewmaker(imgs,budget_multiplier)
+        unnormalized = self.viewmaker(imgs)
         views = self.normalize(unnormalized)
         if with_unnormalized:
             return views, unnormalized
@@ -182,17 +189,19 @@ class PretrainViewMakerSystemDABS(pl.LightningModule):
 
     def normalize(self, imgs):
         # These numbers were computed using compute_image_dset_stats.py
-        if 'cifar' in self.config.data_params.dataset:
+        if hasattr(self.train_dataset, "normalize"):
+            return self.train_dataset.normalize(imgs)
+        elif 'cifar' in self.config.dataset:
             mean = torch.tensor([0.491, 0.482, 0.446], device=imgs.device)
             std = torch.tensor([0.247, 0.243, 0.261], device=imgs.device)
-        elif 'ffhq' in self.config.data_params.dataset:
+        elif 'ffhq' in self.config.dataset:
             mean = torch.tensor([0.5202, 0.4252, 0.3803], device=imgs.device)
             std = torch.tensor([0.2496, 0.2238, 0.2210], device=imgs.device)
-        elif 'audioMNIST' in self.config.data_params.dataset:
+        elif 'audioMNIST' in self.config.dataset:
             mean = torch.tensor([0.2701, 0.6490, 0.5382], device=imgs.device)
             std = torch.tensor([0.2230, 0.1348, 0.1449], device=imgs.device)
         else:
-            raise ValueError(f'Dataset normalizer for {self.config.data_params.dataset} not implemented')
+            raise ValueError(f'Dataset normalizer for {self.config.dataset} not implemented')
         imgs = (imgs - mean[None, :, None, None]) / std[None, :, None, None]
         return imgs
 
@@ -200,7 +209,7 @@ class PretrainViewMakerSystemDABS(pl.LightningModule):
         indices, img,  _ = batch
         #'AdversarialSimCLRLoss':
         view1,unnormalized_view1 = self.view(img,True)
-        view2, unnormalized_view2 = self.view(img, True,budget_multiplier=3)
+        view2, unnormalized_view2 = self.view(img, True)
         emb_dict = {
             'indices': indices,
             'view1_embs': self.model(view1),

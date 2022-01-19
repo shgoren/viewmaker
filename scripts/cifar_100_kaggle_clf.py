@@ -162,8 +162,8 @@ def main():
     (x_train, y_train), (x_test, y_test) = cifar100.load_data()
     if args.low_data:
         len_train, len_test = len(x_train), len(x_test)
-        train_idx, test_idx = np.random.choice(range(len_train), len_train//4),    np.random.choice(range(len_test), len_test//4)
-        (x_train, y_train), (x_test, y_test) = (x_train[train_idx], y_train[train_idx]), (x_test[test_idx], y_test[test_idx])
+        train_idx, test_idx = np.random.choice(range(len_train), len_train//4)
+        x_train, y_train = x_train[train_idx], y_train[train_idx]
     train_images = x_train.astype('float32') / 255
     test_images = x_test.astype('float32') / 255
 

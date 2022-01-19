@@ -209,34 +209,33 @@ class TinyP2PDiscriminator(nn.Module):
 
         return x
 
-    def calc_loss_and_acc(self, real_scores, fake_scores, r1_penalty=0, r1_penalty_weight=0):
+    def calc_loss_and_acc(self, real_scores, fake_scores, r1_penalty=0):
+        calc_loss_for_disc = real_scores is not None
         if self.wgan:
             # labels: real >= 0
             g_loss = -fake_scores.mean()
             g_acc = (fake_scores >= 0).float().mean()
-
-            real_loss = torch.nn.ReLU(inplace=False)(1.0 - real_scores).mean()
-            fake_loss = torch.nn.ReLU(inplace=False)(1.0 + fake_scores).mean()
-            d_acc = 0.5 * ((real_scores >= 0).float().mean() + (fake_scores < 0).float().mean())
+            if calc_loss_for_disc:
+                disc_fake_loss = torch.nn.ReLU(inplace=False)(1.0 + fake_scores).mean()
+                disc_real_loss = torch.nn.ReLU(inplace=False)(1.0 - real_scores).mean()
+                d_acc = 0.5 * ((real_scores >= 0).float().mean() + (fake_scores < 0).float().mean())
         else:
             # flipped labels, real=0
             g_loss = F.binary_cross_entropy(fake_scores, torch.zeros_like(fake_scores, device=fake_scores.device))
             g_acc = (fake_scores < 0.5).float().mean()
-
-            real_loss = F.binary_cross_entropy(fake_scores, torch.ones_like(fake_scores, device=fake_scores.device))
-            fake_loss = F.binary_cross_entropy(real_scores,
-                                               torch.zeros_like(real_scores, device=fake_scores.device))
-            d_acc = 0.5 * ((real_scores <= 0.5).float().mean() + (fake_scores > 0.5).float().mean())
-        d_loss = 0.5 * (real_loss + fake_loss)
-        d_total_loss = d_loss + r1_penalty_weight * r1_penalty
-        return {"real_loss": real_loss,
-                "fake_loss": fake_loss,
-                "d_loss": d_loss,
-                "disc_r1_penalty": r1_penalty,
-                "d_total_loss": d_total_loss,
-                "d_acc": d_acc,
-                "g_loss": g_loss,
-                "g_acc": g_acc}
+            if calc_loss_for_disc:
+                disc_fake_loss = F.binary_cross_entropy(real_scores,
+                                                   torch.zeros_like(real_scores, device=fake_scores.device))
+                disc_real_loss = F.binary_cross_entropy(fake_scores, torch.ones_like(fake_scores, device=fake_scores.device))
+                d_acc = 0.5 * ((real_scores <= 0.5).float().mean() + (fake_scores > 0.5).float().mean())
+        losses = {"g_loss": g_loss, "g_acc": g_acc}
+        if calc_loss_for_disc:
+            losses.update({"real_loss": disc_real_loss,
+                    "fake_loss": disc_fake_loss,
+                    "d_loss": 0.5 * (disc_real_loss + disc_fake_loss),
+                    "disc_r1_penalty": r1_penalty,
+                    "d_acc": d_acc})
+        return losses
 
     @staticmethod
     def r1_penalty(real_pred, real_img):

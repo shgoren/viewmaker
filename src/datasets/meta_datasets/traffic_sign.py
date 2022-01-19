@@ -47,7 +47,10 @@ class TrafficSign(data.Dataset):
 
 
 class BaseTrafficSign(data.Dataset):
+
     NUM_CLASSES = 43
+    MEAN = [0.3400, 0.3119, 0.3212]
+    STD = [0.1632, 0.1632, 0.1729]
 
     def __init__(self, root=DATA_ROOTS['meta_traffic_sign'], train=True, image_transforms=None):
         super().__init__()
@@ -92,3 +95,17 @@ class BaseTrafficSign(data.Dataset):
             image = self.image_transforms(image)
 
         return index, image, label
+
+    @staticmethod
+    def normalize(imgs):
+        mean = torch.tensor(BaseTrafficSign.MEAN, device=imgs.device)
+        std = torch.tensor(BaseTrafficSign.STD, device=imgs.device)
+        imgs = (imgs - mean[None, :, None, None]) / std[None, :, None, None]
+        return imgs
+
+    @staticmethod
+    def unnormalize(imgs):
+        mean = torch.tensor(BaseTrafficSign.MEAN, device=imgs.device)
+        std = torch.tensor(BaseTrafficSign.STD, device=imgs.device)
+        imgs = (imgs * std[None, :, None, None]) + mean[None, :, None, None]
+        return imgs

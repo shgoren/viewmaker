@@ -116,7 +116,6 @@ class PretrainViewMakerSystemDisc(pl.LightningModule):
         return simclr
 
     def create_discriminator(self):
-        torch.manual_seed(3)
         return TinyP2PDiscriminator(wgan=self.config.disc.wgan, blocks_num=self.config.disc.conv_blocks)
 
     def create_viewmaker(self):
