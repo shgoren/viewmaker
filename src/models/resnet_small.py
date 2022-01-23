@@ -63,7 +63,7 @@ class ResNet(nn.Module):
     def __init__(self, block, num_blocks, num_classes=10, num_channels=3, input_size=32):
         super(ResNet, self).__init__()
         # assert input_size in [32, 64]
-        assert input_size % 32 == 0, "input_size must be a multiple of 32"
+        # assert input_size % 32 == 0, "input_size must be a multiple of 32"
         self.in_planes = 64
         self.num_channels = num_channels
 
