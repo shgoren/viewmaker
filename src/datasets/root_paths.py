@@ -12,7 +12,7 @@ DATA_ROOTS = {
     'audio_mnist': 'data/audio_mnist',
     'fluent_speech': 'data/fluent_speech_commands',
     'google_speech': 'data/google_speech_commands',
-    'librispeech': 'data/librispeech',
+    'librispeech': '/ssd/dabs_data/speech/librispeech',
     'voxceleb1': 'data/voxceleb1',
     'pamap2': 'data/sensor/PAMAP2_Dataset/Protocol',
     'ffhq': 'data/ffhq'

@@ -45,8 +45,8 @@ def _process_config(config_json, args, override_dotmap=None, exp_name_suffix=Non
     config.debug = args.debug
     if args.exp_name is not None:
         config.exp_name = args.exp_name
-    if args.t is not None:
-        config.loss_params.t = args.t
+    # if args.t is not None:
+    #     config.loss_params.t = args.t
     # Only override if specified.
     if args.gpu_device: config.gpu_device = args.gpu_device
     if args.num_workers is not None: config.data_loader_workers = args.num_workers

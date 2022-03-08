@@ -26,7 +26,8 @@ class Viewmaker(torch.nn.Module):
     def __init__(self, num_channels=3, activation='relu',
                  clamp=True, frequency_domain=False, downsample_to=False, num_res_blocks=5,
                  additive=1, multiplicative_budget=0.25, multiplicative=0, additive_budget=0.05, tps=0, tps_budget=0.1,
-                 use_budget=True, budget_aware=False, image_dim=None, aug_proba=1, coop=False, coop_budget=None):
+                 use_budget=True, budget_aware=False, image_dim=None, aug_proba=1, coop=False, coop_budget=None,
+                 filter_func=None, norm="l_1", **kwargs):
         '''Initialize the Viewmaker network.
 
         Args:
@@ -59,7 +60,8 @@ class Viewmaker(torch.nn.Module):
         self.additive = additive
         self.tps = tps
         self.budget_aware = budget_aware
-
+        self.norm = norm
+        assert norm in ['l_1', 'l_2', 'l_inf']
         self.feature_extraction = nn.Sequential(
             ConvLayer(self.num_channels + 1, 32, kernel_size=9, stride=1),
             # ConvLayer(self.num_channels, 32, kernel_size=9, stride=1),
@@ -108,6 +110,8 @@ class Viewmaker(torch.nn.Module):
         else:
             self.geometric_transforms = None
 
+        self.filter_func = filter_func if filter_func is not None else lambda x: x
+
         # self.dynamic_budget = False
         # self.budget_net = nn.Sequential(
         #     ConvLayer(last_feature_dim[0], 32, kernel_size=3, stride=1),
@@ -134,11 +138,11 @@ class Viewmaker(torch.nn.Module):
                               upsample=2),
             torch.nn.InstanceNorm2d(64, affine=True),
             self.act(),
-            ResidualBlock(64),
+            # ResidualBlock(64),
             UpsampleConvLayer(64, 32, kernel_size=3, stride=1, upsample=2),
             torch.nn.InstanceNorm2d(32, affine=True),
             self.act(),
-            ResidualBlock(32),
+            # ResidualBlock(32),
             ConvLayer(32, self.num_channels, kernel_size=9,
                       stride=1)
         )
@@ -166,6 +170,7 @@ class Viewmaker(torch.nn.Module):
         if num_res_blocks not in list(range(9)):
             raise ValueError(f'num_res_blocks must be in {list(range(9))}, got {num_res_blocks}.')
 
+        # x = self.filter_func(x)
         x_noise = self.add_noise_channel(x, bound_multiplier=bound_multiplier)
         # x_noise = x
         f = self.feature_extraction(x_noise)
@@ -187,7 +192,7 @@ class Viewmaker(torch.nn.Module):
             if self.budget_aware:
                 # TODO: adapt to multiple budgets
                 f = torch.cat([f, torch.full_like(f[:, [0], :, :], self.additive_budget)], dim=1)
-            pixel_aug = [up(f) for up in self.pixel_transforms]
+            pixel_aug = [self.filter_func(up(f)) for up in self.pixel_transforms]
             add_aug, mul_aug = pixel_aug[:self.additive], pixel_aug[self.additive:]
             pixel_aug = [lambda img, p: self.add_residual(img, resid, p) for resid in add_aug] + \
                         [lambda img, p: self.apply_learned_mask(img, mask, p) for mask in mul_aug]
@@ -216,12 +221,21 @@ class Viewmaker(torch.nn.Module):
         distortion_budget = budget or self.additive_budget
         delta = torch.tanh(y_pixels)  # Project to [-1, 1]
         if self.use_budget:
-            avg_magnitude = delta.abs().mean([1, 2, 3], keepdim=True)
-            max_magnitude = distortion_budget
-            delta = delta * max_magnitude / (avg_magnitude + eps)
+            if self.norm == 'l_1':
+                avg_magnitude = delta.abs().mean([1, 2, 3], keepdim=True)
+                max_magnitude = distortion_budget
+                delta = delta * max_magnitude / (avg_magnitude + eps)
+            elif self.norm == 'l_2':
+                avg_magnitude = torch.sqrt((delta ** 2).mean([1, 2, 3], keepdim=True))
+                max_magnitude = distortion_budget
+                delta = delta * max_magnitude / (avg_magnitude + eps)
+            elif self.norm == 'l_inf':
+                avg_magnitude = torch.amax(delta, dim=[1, 2, 3], keepdim=True)
+                max_magnitude = distortion_budget
+                delta = delta * max_magnitude / (avg_magnitude + eps)
         return delta
 
-    def forward(self, x):
+    def forward(self, x, return_view_func=False):
         x_orig = x
         if self.downsample_to:
             # Downsample.
@@ -237,16 +251,21 @@ class Viewmaker(torch.nn.Module):
 
         pixel_augmentations, geometric_augmentations, features = self.basic_net(y, self.num_res_blocks,
                                                                                 bound_multiplier=1)
-        result = x_orig
-        if pixel_augmentations is not None:
-            for pix_aug in pixel_augmentations:
-                result = pix_aug(result, self.aug_proba)
 
-        if geometric_augmentations is not None:
-            for geo_mod in geometric_augmentations:
-                result = geo_mod(result, self.aug_proba)
+        def view_func(img):
+            if pixel_augmentations is not None:
+                for pix_aug in pixel_augmentations:
+                    img = pix_aug(img, self.aug_proba)
 
-        return result
+            if geometric_augmentations is not None:
+                for geo_mod in geometric_augmentations:
+                    img = geo_mod(img, self.aug_proba)
+            return img
+
+        if return_view_func:
+            return view_func
+        else:
+            return view_func(x_orig)
 
     def get_mask_delta(self, y_pixels, eps=1e-4):
         """
@@ -307,15 +326,17 @@ class Viewmaker(torch.nn.Module):
 
         mask = (p > torch.rand(x.size(0), 1, 1, 1, device=x.device)).float()
         result = result * mask + x * (1 - mask)
-        return result
+        return result, delta
 
 
 class ViewmakerPix2Pix(Viewmaker):
     '''Viewmaker network that stochastically maps a multichannel 2D input to an output of the same size.'''
 
-    def __init__(self, num_channels=3, distortion_budget=0.05, activation='relu',
+    def __init__(self, num_channels=3, activation='relu',
                  clamp=True, frequency_domain=False, downsample_to=False, num_res_blocks=5,
-                 num_views=1, masks=0, use_budget=True):
+                 additive=1, multiplicative_budget=0.25, multiplicative=0, additive_budget=0.05, tps=0, tps_budget=0.1,
+                 use_budget=True, budget_aware=False, image_dim=None, aug_proba=1, coop=False, coop_budget=None,
+                 filter_func=None, noise_channels=(1, 1, 0, 0, 0), **kwargs):
         '''Initialize the Viewmaker network.
 
         Args:
@@ -331,30 +352,74 @@ class ViewmakerPix2Pix(Viewmaker):
                 higher-resolution inputs, but not evaluaed in the paper.
             num_res_blocks: Number of residual blocks to use in the network.
         '''
-        super().__init__()
+        super().__init__(num_channels, activation, clamp, frequency_domain, downsample_to, num_res_blocks,
+                         additive, multiplicative_budget, multiplicative, additive_budget, tps,
+                         tps_budget, use_budget, budget_aware, image_dim, aug_proba, coop, coop_budget,
+                         filter_func, **kwargs)
+
+        del self.feature_extraction
+        del self.res1
+        del self.res2
+        del self.res3
+        del self.res4
+        del self.res5
+        del self.res6
+        del self.res7
+        del self.res8
+        del self.pixel_transforms
 
         self.use_budget = use_budget
         self.num_channels = num_channels
         self.clamp = clamp
         self.frequency_domain = frequency_domain
-        self.distortion_budget = distortion_budget
-        self.num_views = num_views
 
         torch.manual_seed(2)
-        self.encoder = TinyP2PEncoder(num_channels + 1)
-        self.upsampling = nn.ModuleList(
-            [TinyP2PDecoder(num_channels) for _ in range(self.num_views)])  # TODO: check adding instance norm
+        self.encoder = TinyP2PEncoder(num_channels)
+        self.noise_channels = noise_channels
+        self.upsampling = nn.ModuleList([TinyP2PDecoder(num_channels, noise_channels)])
 
     def basic_net(self, y, num_res_blocks=5, bound_multiplier=1):
         if num_res_blocks not in list(range(6)):
             raise ValueError(f'num_res_blocks must be in {list(range(6))}, got {num_res_blocks}.')
 
-        y = self.add_noise_channel(y, bound_multiplier=bound_multiplier)
-        f = self.encoder(y)
+        # y = self.add_noise_channel(y, bound_multiplier=bound_multiplier)
+        f = []
+        for add_noise, latent in zip(self.noise_channels[::-1], self.encoder(y)):
+            if add_noise:
+                f.append(self.add_noise_channel(latent, bound_multiplier=bound_multiplier))
+            else:
+                f.append(latent)
 
-        modifiers = torch.stack([up(f) for up in self.upsampling], dim=1)
+        pixel_aug = [up(f) for up in self.upsampling]
+        add_aug, mul_aug = pixel_aug[:self.additive], pixel_aug[self.additive:]
+        pixel_aug = [lambda img, p: self.add_residual(img, resid, p) for resid in add_aug] + \
+                    [lambda img, p: self.apply_learned_mask(img, mask, p) for mask in mul_aug]
 
-        return modifiers, f
+        if self.geometric_transforms:
+            geometric_aug = [up(f, self.tps_budget) for up in self.geometric_transforms]
+        else:
+            geometric_aug = None
+
+        if self.coop_net is not None:
+            coop_resid = self.coop_net(f)
+            pixel_aug.append(lambda img, p: self.add_residual(img, coop_resid, p, self.coop_budget))
+
+        return pixel_aug, geometric_aug, f
+
+    def add_residual(self, x, residual, p=1, budget=None):
+        delta = residual
+        if self.downsample_to:
+            # Upsample.
+            delta = torch.nn.functional.interpolate(delta, size=x.shape[-2:], mode='bilinear')
+
+        # Additive perturbation
+        result = delta
+        if self.clamp:
+            result = torch.clamp(result, 0, 1.0)
+
+        mask = (p > torch.rand(x.size(0), 1, 1, 1, device=x.device)).float()
+        result = result * mask + x * (1 - mask)
+        return result
 
     def get_additive_delta(self, delta, eps=1e-4):
         """
@@ -370,6 +435,69 @@ class ViewmakerPix2Pix(Viewmaker):
             max_magnitude = distortion_budget
             delta = delta * max_magnitude / (avg_magnitude + eps)
         return delta
+
+
+class ViewmakerTrnasformer(Viewmaker):
+
+    def __init__(self, model, num_channels=3, activation='relu',
+                 clamp=False, frequency_domain=False, downsample_to=False, num_res_blocks=5,
+                 additive=1, multiplicative_budget=0.25, multiplicative=0, additive_budget=0.05, tps=0, tps_budget=0.1,
+                 use_budget=True, budget_aware=False, aug_proba=1, **kwargs):
+        nn.Module.__init__(self)
+        # super(ViewmakerTrnasformer, self).__init__()
+        self.model = model
+
+        self.aug_proba = aug_proba
+        self.additive_budget = additive_budget
+        self.multiplicative_budget = multiplicative_budget
+        self.tps_budget = tps_budget
+        self.use_budget = use_budget
+        self.num_channels = num_channels
+        self.num_res_blocks = num_res_blocks
+        self.activation = activation
+        self.clamp = clamp
+        self.frequency_domain = frequency_domain
+        self.downsample_to = downsample_to
+        self.act = ACTIVATIONS[activation]
+        self.multiplicative = multiplicative
+        self.additive = additive
+        self.tps = tps
+        self.budget_aware = budget_aware
+
+    # def add_noise_channel(self, x, num=1, bound_multiplier=1):
+    #     return super().add_noise_channel(x, num, bound_multiplier)
+
+    def basic_net(self, x, num_res_blocks=5, bound_multiplier=1):
+        b, n, _ = x.shape
+        random_token = F.normalize(torch.rand_like(x[:, [0]]), p=2, dim=-1)
+        x = torch.cat((random_token, x), dim=1)
+        resid = self.model.encode(x, prepool=True)[:, 2:, :]
+        pixel_aug = [lambda img, p: self.add_residual(img, resid, p)]
+        return pixel_aug, [], []
+
+    def get_additive_delta(self, y_pixels, eps=1e-6, budget=None):
+        """
+        Constrains the input perturbation by projecting it onto an L1 sphere
+        :param y_pixels: (b,v,h,w)
+        :param eps:
+        :return:
+        """
+
+        distortion_budget = budget or self.additive_budget
+        delta = torch.tanh(y_pixels)  # Project to [-1, 1]
+        if self.use_budget:
+            avg_magnitude = delta.abs().mean([1, 2], keepdim=True)
+            max_magnitude = distortion_budget
+            delta = delta * max_magnitude / (avg_magnitude + eps)
+        return delta
+
+    def add_residual(self, x, residual, p=1, budget=None):
+        delta = self.get_additive_delta(residual, budget=budget)
+        # Additivfe perturbation
+        result = F.normalize(x + delta, 2, -1)
+        mask = (p > torch.rand(x.size(0), 1, 1, device=x.device)).float()
+        result = result * mask + x * (1 - mask)
+        return result
 
 
 # ---

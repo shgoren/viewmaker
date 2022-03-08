@@ -1,13 +1,12 @@
 import os
-from viewmaker.src.systems import image_systems,PretrainViewMakerSystemDABS
+from viewmaker.src.systems import image_systems, PretrainViewMakerSystemDABS
 from viewmaker.src.utils.callbacks import MoCoLRScheduler
 from viewmaker.src.utils.setup import process_config
 import random, torch, numpy
 
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger,TensorBoardLogger
+from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
 from dabs.src.datasets.catalog import MULTILABEL_DATASETS, PRETRAINING_DATASETS, UNLABELED_DATASETS
-
 
 torch.backends.cudnn.benchmark = True
 
@@ -53,8 +52,8 @@ def run(args):
             initial_lr=config.optim_params.learning_rate,
             max_epochs=config.num_epochs,
             schedule=(
-                int(0.6*config.num_epochs),
-                int(0.8*config.num_epochs),
+                int(0.6 * config.num_epochs),
+                int(0.8 * config.num_epochs),
             ),
         )
         callbacks = [lr_callback]
@@ -70,16 +69,16 @@ def run(args):
     callbacks.append(ckpt_callback)
 
     if not args.debug:
-        wandblogger = WandbLogger(project=config.project, name=config.exp_name ,entity="shafir")
-        wandblogger.log_hyperparams(config)
+        wandblogger = WandbLogger(project=config.project, name=config.exp_name, entity="shafir")
+        wandblogger.log_hyperparams(config.toDict())
     else:
         wandblogger = TensorBoardLogger(config.exp_dir)
 
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
         gpus=len(args.gpu_device.split(",")),
-         # 'ddp' is usually faster, but we use 'dp' so the negative samples 
-         # for the whole batch are used for the SimCLR loss
+        # 'ddp' is usually faster, but we use 'dp' so the negative samples
+        # for the whole batch are used for the SimCLR loss
         accelerator=config.distributed_backend or 'dp',
         max_epochs=config.num_epochs,
         min_epochs=config.num_epochs,
@@ -105,6 +104,7 @@ def seed_everything(seed):
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument('config', type=str, default='path to config file')
     parser.add_argument('--gpu-device', type=str, default=None)

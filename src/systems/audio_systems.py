@@ -395,6 +395,7 @@ class PretrainViewMakerSimCLRSystem(PretrainExpertSimCLRSystem):
             activation=self.config.model_params.generator_activation or 'relu',
             num_res_blocks=self.config.model_params.num_res_blocks,
             clamp=False,
+            image_dim=(64,64)
         )
         return view_model
 

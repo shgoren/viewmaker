@@ -1,9 +1,10 @@
 {
     "exp_base": null,
     "exp_name": "pretrain_expert_cifar_simclr_resnet18",
+    "project": "viewmaker",
     "system": "PretrainExpertSystem",
     "cuda": true,
-    "distributed_backend": "ddp",
+    "distributed_backend": "dp",
     "gpu_device": 0,
     "seed": 0,
     "data_loader_workers": 8,
@@ -12,7 +13,7 @@
         "default_augmentations": "all"
     },
     "model_params": {
-        "out_dim": 100,
+        "out_dim": 128,
         "resnet": true,
         "resnet_version": "resnet18",
         "resnet_small": true,

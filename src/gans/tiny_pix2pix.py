@@ -44,18 +44,19 @@ class GenConvBlock(nn.Module):
 
 class UpConvBlock(nn.Module):
 
-    def __init__(self, in_channels):
+    def __init__(self, upstream_channels, downstream_channels):
         super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = in_channels // 2
+        self.upstream_channels = upstream_channels
+        self.downstream_channels = downstream_channels
 
         self.upscale = nn.Upsample(scale_factor=2, mode='bilinear')
-        self.conv_up = nn.Conv2d(self.in_channels, self.out_channels, kernel_size=(2, 2), stride=(1, 1), padding='same')
+        # up_channels = self.downstream_channels if self.downstream_channels % 2 == 0 else self.downstream_channels - 1
+        self.conv_up = nn.Conv2d(self.upstream_channels, self.downstream_channels, kernel_size=(2, 2), stride=(1, 1), padding='same')
         conv_he_init_keras(self.conv_up)
         ##### concat ######
-        self.conv1 = nn.Conv2d(self.in_channels, self.out_channels, kernel_size=(3, 3), stride=(1, 1), padding='same')
+        self.conv1 = nn.Conv2d(2*self.downstream_channels, self.downstream_channels, kernel_size=(3, 3), stride=(1, 1), padding='same')
         conv_he_init_keras(self.conv1)
-        self.conv2 = nn.Conv2d(self.out_channels, self.out_channels, kernel_size=(3, 3), stride=(1, 1), padding='same')
+        self.conv2 = nn.Conv2d(self.downstream_channels, self.downstream_channels, kernel_size=(3, 3), stride=(1, 1), padding='same')
         conv_he_init_keras(self.conv2)
 
     def forward(self, upstream, downstream):
@@ -100,16 +101,17 @@ class TinyP2PEncoder(nn.Module):
 
 class TinyP2PDecoder(nn.Module):
 
-    def __init__(self, out_channels):
+    def __init__(self, out_channels, noise_channels=(0, 0, 0, 0, 0)):
         super().__init__()
 
         # tiny pix2pix generator decoder
         self.out_channels = out_channels
-        self.upconv_block1 = UpConvBlock(256)
-        self.upconv_block2 = UpConvBlock(128)
-        self.upconv_block3 = UpConvBlock(64)
-        self.upconv_block4 = UpConvBlock(32)
-        self.final_conv = nn.Conv2d(16, out_channels, kernel_size=(3, 3), stride=(1, 1), padding='same')
+        self.upconv_block1 = UpConvBlock(256 + noise_channels[0], 128 + noise_channels[1])
+        self.upconv_block2 = UpConvBlock(128 + noise_channels[1], 64 + noise_channels[2])
+        self.upconv_block3 = UpConvBlock(64 + noise_channels[2], 32 + noise_channels[3])
+        self.upconv_block4 = UpConvBlock(32 + noise_channels[3], 16 + noise_channels[4])
+        self.final_conv = nn.Conv2d(16 + noise_channels[4], out_channels, kernel_size=(3, 3), stride=(1, 1),
+                                    padding='same')
         conv_he_init_keras(self.final_conv)
 
     def forward(self, enc_feat):
@@ -172,20 +174,21 @@ class DescConvBlock(nn.Module):
 class TinyP2PDiscriminator(nn.Module):
     """adapted from here: https://github.com/vrkh1996/tiny-pix2pix"""
 
-    def __init__(self, in_channels=3, wgan=False, blocks_num=4):
+    def __init__(self, in_channels=3, wgan=False, blocks_num=4, patch=True):
         super().__init__()
 
         self.wgan = wgan
         self.blocks = blocks_num
+        self.patch = patch
 
         self.conv_block1 = DescConvBlock(in_channels, 64, batch_norm=False, stride=(2, 2))
         self.conv_block2 = DescConvBlock(64, 128, batch_norm=True, stride=(1, 1))
+        if blocks_num > 5:
+            self.conv_block2_5 = DescConvBlock(128, 128, batch_norm=True, stride=(2, 2))
         self.conv_block3 = DescConvBlock(128, 256, batch_norm=True, stride=(1, 1))
-        if blocks_num>4:
-            self.conv_block3_5 = DescConvBlock(256, 256, batch_norm=True, stride=(1, 1))
+        if blocks_num > 4:
+            self.conv_block3_5 = DescConvBlock(256, 256, batch_norm=True, stride=(2, 2))
         self.conv_block4 = DescConvBlock(256, 512, batch_norm=True, stride=(1, 1))
-        if blocks_num>5:
-            self.conv_block4_5 = DescConvBlock(512, 512, batch_norm=True, stride=(1, 1))
 
         self.conv_blocks = [*self._modules.values()]
 
@@ -195,7 +198,10 @@ class TinyP2PDiscriminator(nn.Module):
         else:
             # feature_dim = self.conv_block4.out_channels
             feature_dim = self.conv_blocks[-1].out_channels
-        self.final_conv = nn.Conv2d(feature_dim, 1, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        if patch:
+            self.final_conv = nn.Conv2d(feature_dim, 1, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        else:
+            self.final_conv = nn.Linear(feature_dim, 1)
         conv_glorot_init_keras(self.final_conv)
 
     def forward(self, x):
@@ -203,6 +209,8 @@ class TinyP2PDiscriminator(nn.Module):
             if i == self.blocks:
                 break
             x = conv_block(x)
+        if not self.patch:
+            x = x.mean(dim=(-1, -2))
         x = self.final_conv(x)
         if not self.wgan:
             x = torch.sigmoid(x)
@@ -224,17 +232,18 @@ class TinyP2PDiscriminator(nn.Module):
             g_loss = F.binary_cross_entropy(fake_scores, torch.zeros_like(fake_scores, device=fake_scores.device))
             g_acc = (fake_scores < 0.5).float().mean()
             if calc_loss_for_disc:
-                disc_fake_loss = F.binary_cross_entropy(real_scores,
-                                                   torch.zeros_like(real_scores, device=fake_scores.device))
-                disc_real_loss = F.binary_cross_entropy(fake_scores, torch.ones_like(fake_scores, device=fake_scores.device))
+                disc_real_loss = F.binary_cross_entropy(real_scores,
+                                                        torch.zeros_like(real_scores, device=fake_scores.device))
+                disc_fake_loss = F.binary_cross_entropy(fake_scores,
+                                                        torch.ones_like(fake_scores, device=fake_scores.device))
                 d_acc = 0.5 * ((real_scores <= 0.5).float().mean() + (fake_scores > 0.5).float().mean())
         losses = {"g_loss": g_loss, "g_acc": g_acc}
         if calc_loss_for_disc:
             losses.update({"real_loss": disc_real_loss,
-                    "fake_loss": disc_fake_loss,
-                    "d_loss": 0.5 * (disc_real_loss + disc_fake_loss),
-                    "disc_r1_penalty": r1_penalty,
-                    "d_acc": d_acc})
+                           "fake_loss": disc_fake_loss,
+                           "d_loss": 0.5 * (disc_real_loss + disc_fake_loss),
+                           "disc_r1_penalty": r1_penalty,
+                           "d_acc": d_acc})
         return losses
 
     @staticmethod
@@ -254,6 +263,9 @@ class TinyP2PDiscriminator(nn.Module):
             outputs=real_pred.sum(), inputs=real_img, create_graph=True)[0]
         grad_penalty = grad_real.pow(2).view(grad_real.shape[0], -1).sum(1).mean()
         return grad_penalty
+
+    def eval(self):
+        pass
 
 
 def normalize_generated(imgs):

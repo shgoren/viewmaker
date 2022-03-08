@@ -4,7 +4,8 @@ import numpy as np
 import torch
 from dotmap import DotMap
 
-from ..image_systems import PretrainViewMakerSystem
+from viewmaker.src.systems.image_systems.utils import create_dataloader
+from viewmaker.src.systems.image_systems import PretrainViewMakerSystem
 from viewmaker.src.datasets import datasets
 from viewmaker.src.objectives.infonce import NoiseConstrastiveEstimation
 from viewmaker.src.objectives.memory_bank import MemoryBank
@@ -55,7 +56,7 @@ class PretrainExpertSystem(PretrainViewMakerSystem):
             if 'img_embs_2' not in emb_dict:
                 raise ValueError(f'img_embs_2 is required for SimCLR loss')
             loss_fn = SimCLRObjective(emb_dict['img_embs_1'], emb_dict['img_embs_2'], t=self.t)
-            loss, acc = loss_fn.get_loss_and_acc()
+            loss, acc, pos_sim, neg_sim = loss_fn.get_loss_and_acc()
         else:
             raise Exception(f'Objective {self.loss_name} is not supported.')
 

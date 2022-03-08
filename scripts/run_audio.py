@@ -57,7 +57,7 @@ def run(args, gpu_device=None):
         config = process_config(args.config, exp_name_suffix=args.caller_intent)
         config.data_params.caller_intent = args.caller_intent
     else:
-        config = process_config(args.config)
+        config = process_config(args.config, args)
 
     # Only override if specified.
     if gpu_device: config.gpu_device = gpu_device
@@ -86,7 +86,7 @@ def run(args, gpu_device=None):
     )
 
     if not args.debug:
-        wandblogger = WandbLogger(project='audio-viewmaker',entity="shafir")
+        wandblogger = WandbLogger(project='audio-viewmaker', entity="shafir")
         wandblogger.log_hyperparams(config)
 
     else:
@@ -132,6 +132,8 @@ if __name__ == "__main__":
     parser.add_argument('--profiler', action='store_true')
     parser.add_argument('--ckpt', type=str, default=None)
     parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--exp_name', type=str, default=None)
+    parser.add_argument('--num_workers', type=int, default=None)
     args = parser.parse_args()
 
     # Ensure it's a string, even if from an older config
