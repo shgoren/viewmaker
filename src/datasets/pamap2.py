@@ -16,7 +16,7 @@ from torchaudio.transforms import Spectrogram
 import nlpaug.augmenter.spectrogram as nas
 import nlpaug.flow as naf
 
-from  viewmaker.src.datasets.root_paths import DATA_ROOTS
+from src.datasets.root_paths import DATA_ROOTS
 
 ACTIVITY_LABELS = [
     1,  # lying

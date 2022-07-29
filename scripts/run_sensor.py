@@ -1,9 +1,13 @@
+import warnings
+warnings.filterwarnings('ignore')
+
 import os
 import wandb
 from copy import deepcopy
 from  viewmaker.src.systems import sensor_systems
 from  viewmaker.src.utils.utils import load_json
 from  viewmaker.src.utils.setup import process_config
+from pytorch_lightning.loggers import WandbLogger,TensorBoardLogger
 import random
 import torch
 import numpy
@@ -55,14 +59,19 @@ def run(args, gpu_device=None):
         save_top_k=-1,
         every_n_epochs=1,
     )
-    wandb.init(project='sensor_viewmaker', entity='vm',
-               name=config.exp_name, config=config, sync_tensorboard=True)
+
+    if not config.debug:
+        wandblogger = WandbLogger(project=config.project, name=config.exp_name ,entity="shafir")
+        wandblogger.log_hyperparams(config)
+    else:
+        wandblogger = TensorBoardLogger(config.exp_dir)
+    
     callbacks = [ckpt_callback]
 
     trainer = pl.Trainer(
         default_root_dir=config.exp_dir,
         gpus=gpu_device,
-        distributed_backend=config.distributed_backend or 'dp',
+        strategy=config.distributed_backend or 'dp',
         max_epochs=config.num_epochs,
         min_epochs=config.num_epochs,
         checkpoint_callback=True,
@@ -72,6 +81,7 @@ def run(args, gpu_device=None):
         callbacks=callbacks,
         val_check_interval=config.val_check_interval or 1.0,
         limit_val_batches=config.limit_val_batches or 1.0,
+        logger=wandblogger,
     )
     trainer.fit(system)
 
@@ -94,7 +104,6 @@ if __name__ == "__main__":
     parser.add_argument('--ckpt', type=str, default=None)
     parser.add_argument('--num-workers', type=int, default=None)
     args = parser.parse_args()
-
     # Ensure it's a string, even if from an older config
     gpu_device = str(args.gpu_device) if args.gpu_device else None
     run(args, gpu_device=gpu_device)

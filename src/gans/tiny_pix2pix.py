@@ -224,8 +224,9 @@ class TinyP2PDiscriminator(nn.Module):
             g_acc = (fake_scores < 0.5).float().mean()
 
             real_loss = F.binary_cross_entropy(fake_scores, torch.ones_like(fake_scores, device=fake_scores.device))
-            fake_loss = F.binary_cross_entropy(real_scores,
-                                               torch.zeros_like(real_scores, device=fake_scores.device))
+            if real_scores is None: # some bug in first iteration
+                real_scores = torch.zeros_like(fake_scores)
+            fake_loss = F.binary_cross_entropy(real_scores, torch.zeros_like(real_scores, device=fake_scores.device))
             d_acc = 0.5 * ((real_scores <= 0.5).float().mean() + (fake_scores > 0.5).float().mean())
         d_loss = 0.5 * (real_loss + fake_loss)
         d_total_loss = d_loss + r1_penalty_weight * r1_penalty

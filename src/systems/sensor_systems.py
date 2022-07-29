@@ -302,14 +302,15 @@ class PretrainViewMakerSystem(PretrainExpertSimCLRSystem):
             t=self.config.loss_params.t,
             view_maker_loss_weight=self.config.loss_params.view_maker_loss_weight
         )
-        encoder_loss, view_maker_loss = loss_function.get_loss()
+        # encoder_loss, view_maker_loss 
+        encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim = loss_function.get_loss()
         
         with torch.no_grad():
             new_data_memory = l2_normalize(emb_dict['view1_embs'].detach(), dim=1)
             self.memory_bank.update(emb_dict['indices'], new_data_memory)
             self.memory_bank_labels.update(emb_dict['indices'], emb_dict['labels'].unsqueeze(1))
 
-        return encoder_loss, view_maker_loss
+        return encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim
 
     def get_view_bound_magnitude(self):
         return self.config.model_params.view_bound_magnitude
@@ -320,7 +321,7 @@ class PretrainViewMakerSystem(PretrainExpertSimCLRSystem):
         return emb_dict
     
     def training_step_end(self, emb_dict):
-        encoder_loss, view_maker_loss = self.get_losses_for_batch(emb_dict)
+        encoder_loss, encoder_acc, view_maker_loss, positive_sim, negative_sim = self.get_losses_for_batch(emb_dict)
 
         # Handle Tensor (dp) and int (ddp) cases
         if emb_dict['optimizer_idx'].__class__ == int or emb_dict['optimizer_idx'].dim() == 0:
@@ -337,7 +338,9 @@ class PretrainViewMakerSystem(PretrainExpertSimCLRSystem):
             # update the bound allowed for view
             self.view.bound_magnitude = self.get_view_bound_magnitude()
 
-            metrics = {'view_maker_loss': view_maker_loss}
+            # metrics = {'view_maker_loss': view_maker_loss}
+            metrics = {"encoder_loss":encoder_loss, "encoder_acc":encoder_acc, "view_maker_loss":view_maker_loss, "positive_sim":positive_sim, "negative_sim":negative_sim}
+            wandb.log(metrics)
             return {'loss': view_maker_loss, 'log': metrics}
 
     def validation_step(self, batch, batch_idx):
@@ -359,6 +362,7 @@ class PretrainViewMakerSystem(PretrainExpertSimCLRSystem):
         val_acc = num_correct / float(num_total)
         metrics['val_acc'] = val_acc
         progress_bar = {'acc': val_acc}
+        wandb.log(metrics)
         return {'log': metrics, 'val_acc': val_acc, 'progress_bar': progress_bar}
 
 

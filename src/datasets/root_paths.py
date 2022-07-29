@@ -14,6 +14,8 @@ DATA_ROOTS = {
     'google_speech': 'data/google_speech_commands',
     'librispeech': 'data/librispeech',
     'voxceleb1': 'data/voxceleb1',
-    'pamap2': 'data/sensor/PAMAP2_Dataset/Protocol',
-    'ffhq': 'data/ffhq'
+    'pamap2': '/disk2/ofirb/dabs/data/sensor/pamap2/PAMAP2_Dataset/Protocol',
+    # 'ffhq': '/disk2/rinong/FFHQ/png/png/128x128'
+    'ffhq': '/disk2/shahaf/FFHQ/',
+    'lfw': '/disk2/ofirb/dabs/data/natural_images/lfw'
 } 

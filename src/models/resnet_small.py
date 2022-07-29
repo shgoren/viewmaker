@@ -112,12 +112,10 @@ class ResNet(nn.Module):
 
 
 def ResNet18(num_classes, num_channels=3, input_size=32):
-    return ResNet(BasicBlock, [2,2,2,2], num_classes, num_channels=num_channels, 
-                  input_size=input_size)
+    return ResNet(BasicBlock, [2,2,2,2], num_classes, num_channels=num_channels, input_size=input_size)
 
 def CustomResnet(num_classes, num_blocks, num_channels=3, input_size=32):
-    return ResNet(BasicBlock, num_blocks, num_classes, num_channels=num_channels,
-                  input_size=input_size)
+    return ResNet(BasicBlock, num_blocks, num_classes, num_channels=num_channels, input_size=input_size)
 
 
 def ResNet34(num_classes):
@@ -134,3 +132,37 @@ def ResNet101(num_classes):
 
 def ResNet152(num_classes):
     return ResNet(Bottleneck, [3,8,36,3], num_classes)
+
+
+class ResNetPyr(ResNet):
+    def __init__(self,num_classes=10, num_channels=3, input_size=32):
+        super().__init__(BasicBlock, [2,2,2,2], num_classes, num_channels, input_size)
+
+    def forward(self, x, layer=7 , pyramid_input = None):
+        if pyramid_input is None:
+            return super().forward(x,layer)
+        
+        
+        if layer <= 0: 
+            return x
+        out = F.relu(self.bn1(self.conv1(x)))
+        if layer == 1:
+            return out
+        out = self.layer1(out) + pyramid_input[0][1] 
+        if layer == 2:
+            return out
+        out = self.layer2(out) + pyramid_input[0][0]
+        if layer == 3:
+            return out
+        out = self.layer3(out)
+        if layer == 4:
+            return out
+        out = self.layer4(out)
+        if layer == 5:
+            return out
+        out = F.avg_pool2d(out, 4)
+        out = out.view(out.size(0), -1)
+        if layer == 6:
+            return out
+        out = self.fc(out)
+        return out
