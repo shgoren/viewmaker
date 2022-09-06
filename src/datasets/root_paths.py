@@ -17,5 +17,5 @@ DATA_ROOTS = {
     'pamap2': '/disk2/ofirb/dabs/data/sensor/pamap2/PAMAP2_Dataset/Protocol',
     # 'ffhq': '/disk2/rinong/FFHQ/png/png/128x128'
     'ffhq': '/disk2/shahaf/FFHQ/',
-    'lfw': '/disk2/ofirb/dabs/data/natural_images/lfw'
+    'lfw': '/workspace/dabs/data/natural_images/lfw'
 } 
