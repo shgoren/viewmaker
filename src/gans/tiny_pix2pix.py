@@ -300,3 +300,33 @@ class Discriminator(nn.Module):
 
     def forward(self, img):
         return self.model(img)
+
+    def calc_loss_and_acc(self, real_scores, fake_scores, r1_penalty=0, r1_penalty_weight=0):
+        # if self.wgan:
+        #     # labels: real >= 0
+        #     g_loss = -fake_scores.mean()
+        #     g_acc = (fake_scores >= 0).float().mean()
+
+        #     real_loss = torch.nn.ReLU(inplace=False)(1.0 - real_scores).mean()
+        #     fake_loss = torch.nn.ReLU(inplace=False)(1.0 + fake_scores).mean()
+        #     d_acc = 0.5 * ((real_scores >= 0).float().mean() + (fake_scores < 0).float().mean())
+        # else:
+        # flipped labels, real=0
+        g_loss = F.binary_cross_entropy(fake_scores, torch.zeros_like(fake_scores, device=fake_scores.device))
+        g_acc = (fake_scores < 0.5).float().mean()
+
+        real_loss = F.binary_cross_entropy(fake_scores, torch.ones_like(fake_scores, device=fake_scores.device))
+        if real_scores is None: # some bug in first iteration
+            real_scores = torch.zeros_like(fake_scores)
+        fake_loss = F.binary_cross_entropy(real_scores, torch.zeros_like(real_scores, device=fake_scores.device))
+        d_acc = 0.5 * ((real_scores <= 0.5).float().mean() + (fake_scores > 0.5).float().mean())
+        d_loss = 0.5 * (real_loss + fake_loss)
+        d_total_loss = d_loss + r1_penalty_weight * r1_penalty
+        return {"real_loss": real_loss,
+                "fake_loss": fake_loss,
+                "d_loss": d_loss,
+                "disc_r1_penalty": r1_penalty,
+                "d_total_loss": d_total_loss,
+                "d_acc": d_acc,
+                "g_loss": g_loss,
+                "g_acc": g_acc}
